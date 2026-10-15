@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 
-// Pre-seeded database of popular raid bosses and their top counters
+// Expanded Raid Boss Database
 const RAID_BOSS_COUNTERS = {
   "Rayquaza": {
     types: ["Dragon", "Flying"],
@@ -47,6 +47,50 @@ const RAID_BOSS_COUNTERS = {
       { name: "Giratina (Origin)", fast: "Shadow Claw", charged: "Shadow Force", tier: "Top Non-Mega" },
       { name: "Chandelure", fast: "Hex", charged: "Shadow Ball", tier: "Budget" }
     ]
+  },
+  "Necrozma (Dusk Mane)": {
+    types: ["Psychic", "Steel"],
+    weaknesses: ["Dark", "Ghost", "Fire", "Ground"],
+    counters: [
+      { name: "Mega Tyranitar", fast: "Bite", charged: "Brutal Swing", tier: "Mega" },
+      { name: "Mega Gengar", fast: "Shadow Claw", charged: "Shadow Ball", tier: "Mega" },
+      { name: "Reshiram", fast: "Fire Fang", charged: "Fusion Flare", tier: "Top Non-Mega" },
+      { name: "Hydreigon", fast: "Bite", charged: "Brutal Swing", tier: "Top Non-Mega" },
+      { name: "Primal Groudon", fast: "Mud Shot", charged: "Precipice Blades", tier: "Mega" }
+    ]
+  },
+  "Necrozma (Dawn Wings)": {
+    types: ["Psychic", "Ghost"],
+    weaknesses: ["Ghost (2.56x)", "Dark (2.56x)"],
+    counters: [
+      { name: "Mega Tyranitar", fast: "Bite", charged: "Brutal Swing", tier: "Mega" },
+      { name: "Mega Gengar", fast: "Shadow Claw", charged: "Shadow Ball", tier: "Mega" },
+      { name: "Hydreigon", fast: "Bite", charged: "Brutal Swing", tier: "Top Non-Mega" },
+      { name: "Tyranitar", fast: "Bite", charged: "Brutal Swing", tier: "Top Non-Mega" },
+      { name: "Chandelure", fast: "Hex", charged: "Shadow Ball", tier: "Budget" }
+    ]
+  },
+  "Dialga": {
+    types: ["Steel", "Dragon"],
+    weaknesses: ["Fighting", "Ground"],
+    counters: [
+      { name: "Terrakion", fast: "Double Kick", charged: "Sacred Sword", tier: "Top Non-Mega" },
+      { name: "Primal Groudon", fast: "Mud Shot", charged: "Precipice Blades", tier: "Mega" },
+      { name: "Mega Lucario", fast: "Force Palm", charged: "Aura Sphere", tier: "Mega" },
+      { name: "Conkeldurr", fast: "Counter", charged: "Dynamic Punch", tier: "Top Non-Mega" },
+      { name: "Machamp", fast: "Counter", charged: "Dynamic Punch", tier: "Budget" }
+    ]
+  },
+  "Palkia": {
+    types: ["Water", "Dragon"],
+    weaknesses: ["Dragon", "Fairy"],
+    counters: [
+      { name: "Mega Rayquaza", fast: "Dragon Tail", charged: "Breaking Swipe", tier: "Mega" },
+      { name: "Mega Gardevoir", fast: "Charm", charged: "Dazzling Gleam", tier: "Mega" },
+      { name: "Dialga", fast: "Dragon Breath", charged: "Draco Meteor", tier: "Top Non-Mega" },
+      { name: "Dragonite", fast: "Dragon Tail", charged: "Outrage", tier: "Budget" },
+      { name: "Togekiss", fast: "Charm", charged: "Dazzling Gleam", tier: "Budget" }
+    ]
   }
 };
 
@@ -60,9 +104,11 @@ export default function App() {
     ];
   });
 
-  const [searchTarget, setSearchTarget] = useState("Rayquaza");
+  // Search Boss State
+  const [bossQuery, setBossQuery] = useState("");
+  const [selectedBoss, setSelectedBoss] = useState("Rayquaza");
 
-  // Form states for manual or scanned entry
+  // Form State
   const [formData, setFormData] = useState({
     name: "",
     cp: "",
@@ -74,9 +120,91 @@ export default function App() {
     chargedMove: ""
   });
 
+  // Image Upload / OCR State
+  const [ocrStatus, setOcrStatus] = useState("");
+  const [isScanning, setIsScanning] = useState(false);
+  const [uploadedPreview, setUploadedPreview] = useState(null);
+
   useEffect(() => {
     localStorage.setItem("pogo_inventory", JSON.stringify(inventory));
   }, [inventory]);
+
+  // Filtered boss suggestions for search input
+  const bossList = Object.keys(RAID_BOSS_COUNTERS);
+  const filteredBosses = useMemo(() => {
+    if (!bossQuery.trim()) return bossList;
+    return bossList.filter((b) => b.toLowerCase().includes(bossQuery.toLowerCase()));
+  }, [bossQuery, bossList]);
+
+  // Handle OCR Screenshot Upload
+  const handleImageUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadedPreview(URL.createObjectURL(file));
+    setIsScanning(true);
+    setOcrStatus("Loading OCR scanner...");
+
+    try {
+      if (!window.Tesseract) {
+        throw new Error("Tesseract engine not loaded. Check internet connection.");
+      }
+
+      setOcrStatus("Analyzing image text (this takes 3-5 seconds)...");
+      const result = await window.Tesseract.recognize(file, "eng", {
+        logger: (m) => {
+          if (m.status === "recognizing text") {
+            setOcrStatus(`Scanning: ${Math.round(m.progress * 100)}%`);
+          }
+        }
+      });
+
+      const rawText = result.data.text;
+      const lines = rawText.split("\n").map((l) => l.trim()).filter(Boolean);
+
+      // 1. Detect CP (e.g., "CP 3120" or "CP3120")
+      const cpMatch = rawText.match(/CP\s*([0-9]{2,4})/i) || rawText.match(/([0-9]{3,4})\s*CP/i);
+      const extractedCp = cpMatch ? cpMatch[1] : "";
+
+      // 2. Detect Form (Shadow / Purified)
+      let detectedForm = "Regular";
+      if (/shadow/i.test(rawText) || /frustration/i.test(rawText)) detectedForm = "Shadow";
+      if (/purified/i.test(rawText) || /return/i.test(rawText)) detectedForm = "Purified";
+
+      // 3. Match Species from known Pokémon / Boss list
+      let matchedName = "";
+      for (const boss of bossList) {
+        if (new RegExp(boss, "i").test(rawText)) {
+          matchedName = boss;
+          break;
+        }
+      }
+      if (!matchedName) {
+        // Fallback: look at prominent line around CP
+        for (const line of lines) {
+          if (!/cp|hp|weight|height|stardust|candy/i.test(line) && line.length >= 3 && line.length <= 16) {
+            matchedName = line.replace(/[^a-zA-Z\s]/g, "").trim();
+            break;
+          }
+        }
+      }
+
+      // Update Form Fields
+      setFormData((prev) => ({
+        ...prev,
+        name: matchedName || prev.name,
+        cp: extractedCp || prev.cp,
+        form: detectedForm
+      }));
+
+      setOcrStatus("Text parsed successfully! Review stats below.");
+    } catch (err) {
+      console.error(err);
+      setOcrStatus("Failed to scan screenshot. You can enter details manually.");
+    } finally {
+      setIsScanning(false);
+    }
+  };
 
   const handleAddPokemon = (e) => {
     e.preventDefault();
@@ -91,6 +219,8 @@ export default function App() {
     };
     setInventory([newEntry, ...inventory]);
     setFormData({ name: "", cp: "", form: "Regular", ivAtk: 15, ivDef: 15, ivHp: 15, fastMove: "", chargedMove: "" });
+    setUploadedPreview(null);
+    setOcrStatus("");
     setActiveTab("inventory");
   };
 
@@ -98,7 +228,6 @@ export default function App() {
     setInventory(inventory.filter((p) => p.id !== id));
   };
 
-  // Check matching inventory for a given counter
   const findOwnedCounters = (counterName) => {
     return inventory.filter(
       (item) =>
@@ -107,11 +236,11 @@ export default function App() {
     );
   };
 
-  const activeBoss = RAID_BOSS_COUNTERS[searchTarget];
+  const activeBossData = RAID_BOSS_COUNTERS[selectedBoss];
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
-      {/* Top Navbar */}
+      {/* Header */}
       <header className="bg-slate-800 border-b border-slate-700 px-6 py-4 flex flex-wrap justify-between items-center gap-4">
         <h1 className="text-xl font-bold tracking-wide text-amber-400 flex items-center gap-2">
           ⚡ PoGo Counter Scout
@@ -123,7 +252,7 @@ export default function App() {
               activeTab === "search" ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"
             }`}
           >
-            Counter Finder
+            Counters
           </button>
           <button
             onClick={() => setActiveTab("add")}
@@ -131,7 +260,7 @@ export default function App() {
               activeTab === "add" ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"
             }`}
           >
-            + Add / Upload
+            + Add / Scan
           </button>
           <button
             onClick={() => setActiveTab("inventory")}
@@ -146,41 +275,74 @@ export default function App() {
 
       {/* Main Body */}
       <main className="p-6 max-w-5xl mx-auto w-full flex-1">
-        {/* TAB 1: COUNTER FINDER */}
+        {/* TAB 1: SEARCHABLE COUNTER FINDER */}
         {activeTab === "search" && (
           <div className="space-y-6">
-            <div className="bg-slate-800 p-5 rounded-xl border border-slate-700 flex flex-wrap items-center justify-between gap-4">
+            {/* Search Input Bar */}
+            <div className="bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4">
               <div>
-                <label className="text-xs uppercase text-slate-400 font-bold block mb-1">Select Raid Boss</label>
-                <select
-                  value={searchTarget}
-                  onChange={(e) => setSearchTarget(e.target.value)}
-                  className="bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white font-medium focus:outline-none focus:border-amber-400"
-                >
-                  {Object.keys(RAID_BOSS_COUNTERS).map((boss) => (
-                    <option key={boss} value={boss}>{boss}</option>
-                  ))}
-                </select>
+                <label className="text-xs uppercase text-slate-400 font-bold block mb-1">
+                  Type Raid Boss Name (Live Search)
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="Search e.g. Rayquaza, Kyogre, Necrozma..."
+                    value={bossQuery}
+                    onChange={(e) => setBossQuery(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white font-medium focus:outline-none focus:border-amber-400 pl-10"
+                  />
+                  <span className="absolute left-3 top-2.5 text-slate-400 text-lg">🔍</span>
+                </div>
               </div>
 
-              {activeBoss && (
-                <div className="flex gap-4 text-sm">
+              {/* Boss Pills Filter */}
+              <div className="flex flex-wrap gap-2">
+                {filteredBosses.length > 0 ? (
+                  filteredBosses.map((boss) => (
+                    <button
+                      key={boss}
+                      onClick={() => {
+                        setSelectedBoss(boss);
+                        setBossQuery("");
+                      }}
+                      className={`px-3 py-1 text-xs rounded-full font-semibold border transition ${
+                        selectedBoss === boss
+                          ? "bg-amber-500 text-slate-950 border-amber-400 shadow"
+                          : "bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-500"
+                      }`}
+                    >
+                      {boss}
+                    </button>
+                  ))
+                ) : (
+                  <span className="text-xs text-rose-400">No boss matching "{bossQuery}"</span>
+                )}
+              </div>
+
+              {/* Active Boss Type Info */}
+              {activeBossData && (
+                <div className="pt-3 border-t border-slate-700 flex flex-wrap gap-6 text-sm">
                   <div>
-                    <span className="text-slate-400 text-xs block">Boss Types:</span>
-                    <span className="font-semibold">{activeBoss.types.join(" / ")}</span>
+                    <span className="text-slate-400 text-xs block">Active Boss:</span>
+                    <span className="font-bold text-amber-400 text-base">{selectedBoss}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-xs block">Types:</span>
+                    <span className="font-semibold">{activeBossData.types.join(" / ")}</span>
                   </div>
                   <div>
                     <span className="text-slate-400 text-xs block">Weaknesses:</span>
-                    <span className="font-semibold text-rose-400">{activeBoss.weaknesses.join(", ")}</span>
+                    <span className="font-semibold text-rose-400">{activeBossData.weaknesses.join(", ")}</span>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Counters List */}
-            {activeBoss ? (
+            {/* Counter Cards */}
+            {activeBossData ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {activeBoss.counters.map((c, idx) => {
+                {activeBossData.counters.map((c, idx) => {
                   const owned = findOwnedCounters(c.name);
                   const isOwned = owned.length > 0;
 
@@ -206,20 +368,19 @@ export default function App() {
                           </p>
                         </div>
 
-                        {/* Owned Status Indicator */}
                         {isOwned ? (
                           <span className="bg-emerald-500 text-slate-950 text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wider shadow">
-                            ✓ Owned ({owned.length})
+                            ✓ Ready ({owned.length})
                           </span>
                         ) : (
                           <span className="text-xs text-slate-500 italic">Not in Box</span>
                         )}
                       </div>
 
-                      {/* Matching owned items list */}
+                      {/* Display Matching User Pokémon */}
                       {isOwned && (
                         <div className="mt-3 pt-3 border-t border-emerald-900/50 space-y-1">
-                          <p className="text-xs font-bold text-emerald-400 uppercase">Your Ready Pokémon:</p>
+                          <p className="text-xs font-bold text-emerald-400 uppercase">Available in Box:</p>
                           {owned.map((p) => (
                             <div key={p.id} className="text-xs bg-emerald-950/60 p-2 rounded flex justify-between items-center text-emerald-200">
                               <span>
@@ -237,20 +398,52 @@ export default function App() {
                   );
                 })}
               </div>
-            ) : (
-              <p className="text-slate-400">Boss not found.</p>
-            )}
+            ) : null}
           </div>
         )}
 
-        {/* TAB 2: ADD / APPRAISAL / MOVESET ENTRY */}
+        {/* TAB 2: ADD / SCAN SCREENSHOT */}
         {activeTab === "add" && (
-          <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-xl mx-auto shadow-xl">
-            <h2 className="text-lg font-bold text-amber-400 mb-2">Register New Pokémon</h2>
-            <p className="text-xs text-slate-400 mb-6">
-              Enter appraisal stats and movesets below. (For bulk imports, OCR parsers like Tesseract can extract these from screenshots).
-            </p>
+          <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-xl mx-auto shadow-xl space-y-6">
+            <div>
+              <h2 className="text-lg font-bold text-amber-400 mb-1">Add or Scan Pokémon</h2>
+              <p className="text-xs text-slate-400">
+                Upload a screenshot from Pokémon GO (appraisal or stat page) to auto-extract info, or fill in the values below.
+              </p>
+            </div>
 
+            {/* Screenshot Dropzone */}
+            <div className="border-2 border-dashed border-slate-600 hover:border-amber-400 rounded-xl p-4 text-center bg-slate-900/50">
+              <input
+                type="file"
+                accept="image/*"
+                id="screenshot-input"
+                onChange={handleImageUpload}
+                className="hidden"
+              />
+              <label htmlFor="screenshot-input" className="cursor-pointer block">
+                {uploadedPreview ? (
+                  <div className="space-y-2">
+                    <img src={uploadedPreview} alt="Preview" className="max-h-48 mx-auto rounded shadow border border-slate-700" />
+                    <span className="text-xs text-amber-400 underline block">Tap to pick another image</span>
+                  </div>
+                ) : (
+                  <div className="py-4">
+                    <span className="text-3xl block mb-2">📸</span>
+                    <span className="text-sm font-semibold text-slate-300 block">Tap to upload Appraisal Screenshot</span>
+                    <span className="text-xs text-slate-500">Auto-detects CP, Species Name, and Shadow status</span>
+                  </div>
+                )}
+              </label>
+
+              {ocrStatus && (
+                <div className={`mt-3 text-xs font-semibold ${isScanning ? "text-amber-400 animate-pulse" : "text-emerald-400"}`}>
+                  {ocrStatus}
+                </div>
+              )}
+            </div>
+
+            {/* Verified Form */}
             <form onSubmit={handleAddPokemon} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -284,7 +477,7 @@ export default function App() {
                       key={f}
                       type="button"
                       onClick={() => setFormData({ ...formData, form: f })}
-                      className={`flex-1 py-1.5 text-xs rounded-lg font-bold border ${
+                      className={`flex-1 py-1.5 text-xs rounded-lg font-bold border transition ${
                         formData.form === f
                           ? "bg-amber-500 border-amber-400 text-slate-950"
                           : "bg-slate-900 border-slate-700 text-slate-300"
@@ -299,26 +492,27 @@ export default function App() {
               {/* Appraisal IV Bars */}
               <div className="bg-slate-900 p-4 rounded-lg border border-slate-700 space-y-3">
                 <span className="text-xs font-bold uppercase tracking-wider text-amber-400 block">Appraisal (IVs / 15)</span>
-                {["ivAtk", "ivDef", "ivHp"].map((statKey) => {
-                  const label = statKey === "ivAtk" ? "Attack" : statKey === "ivDef" ? "Defense" : "HP";
-                  return (
-                    <div key={statKey} className="flex items-center gap-3">
-                      <span className="text-xs font-semibold w-16 text-slate-300">{label}:</span>
-                      <input
-                        type="range"
-                        min="0"
-                        max="15"
-                        value={formData[statKey]}
-                        onChange={(e) => setFormData({ ...formData, [statKey]: Number(e.target.value) })}
-                        className="flex-1 accent-amber-500"
-                      />
-                      <span className="text-xs font-mono font-bold w-6 text-right">{formData[statKey]}</span>
-                    </div>
-                  );
-                })}
+                {[
+                  { key: "ivAtk", label: "Attack" },
+                  { key: "ivDef", label: "Defense" },
+                  { key: "ivHp", label: "HP" }
+                ].map(({ key, label }) => (
+                  <div key={key} className="flex items-center gap-3">
+                    <span className="text-xs font-semibold w-16 text-slate-300">{label}:</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="15"
+                      value={formData[key]}
+                      onChange={(e) => setFormData({ ...formData, [key]: Number(e.target.value) })}
+                      className="flex-1 accent-amber-500"
+                    />
+                    <span className="text-xs font-mono font-bold w-6 text-right">{formData[key]}</span>
+                  </div>
+                ))}
               </div>
 
-              {/* Moveset Page Section */}
+              {/* Moveset Inputs */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-xs font-bold text-slate-300 block mb-1">Fast Move</label>
@@ -352,7 +546,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 3: INVENTORY LIST */}
+        {/* TAB 3: INVENTORY */}
         {activeTab === "inventory" && (
           <div className="space-y-4">
             <div className="flex justify-between items-center">
@@ -361,7 +555,7 @@ export default function App() {
                 onClick={() => setActiveTab("add")}
                 className="text-xs bg-slate-800 hover:bg-slate-700 border border-slate-600 px-3 py-1.5 rounded-lg"
               >
-                + Add Another
+                + Add / Scan Another
               </button>
             </div>
 
@@ -386,7 +580,6 @@ export default function App() {
                         <div>💥 Charged: <span className="text-slate-200">{p.chargedMove || "Not Set"}</span></div>
                       </div>
 
-                      {/* IV Rating */}
                       <div className="flex items-center justify-between text-xs">
                         <span className="text-slate-400">IV: {p.ivAtk}/{p.ivDef}/{p.ivHp}</span>
                         <span className={`font-bold ${ivPercent === 100 ? "text-amber-400" : "text-emerald-400"}`}>
