@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Upload, Search, Shield, Zap, Sparkles, Trash2, 
-  RefreshCw, X, Layers, Image as ImageIcon, Download, UploadCloud
+  RefreshCw, X, Layers, Image as ImageIcon, Download, UploadCloud, Plus
 } from 'lucide-react';
 import { createWorker } from 'tesseract.js';
 
@@ -97,19 +97,15 @@ export default function App() {
     const W = canvas.width;
     const H = canvas.height;
 
-    // Horizontal bounds of the stat bars inside the white card
     const startX = Math.round(W * 0.118);
     const endX = Math.round(W * 0.462);
     const totalBarWidth = endX - startX;
 
-    // Vertical scan positions for Attack, Defense, HP
-    // Adjusted Attack slightly higher (0.778) to sit right in the center of the bar
     const barYPercentages = [0.778, 0.823, 0.862];
 
     const ivs = barYPercentages.map((yPct) => {
       const yCenter = Math.round(H * yPct);
       let filledPixels = 0;
-      // Thicker vertical sampling window to guarantee hitting the bar core
       const offsets = [-4, -2, -1, 0, 1, 2, 4];
 
       for (let x = startX; x <= endX; x++) {
@@ -119,11 +115,7 @@ export default function App() {
           const [r, g, b] = [pixel[0], pixel[1], pixel[2]];
           const [h, s, l] = rgbToHsl(r, g, b);
 
-          // 1. In-game Orange (partial fill):
           const isOrange = (h >= 16 && h <= 55 && s >= 30 && l >= 25 && l <= 80);
-          
-          // 2. Coral Pink/Red (Maxed 15 IV):
-          // High red channel with noticeably lower blue/green: r > 180 and r > g + 35
           const isCoralRedByRGB = (r > 175 && r > g + 30 && r > b + 30 && l <= 85);
           const isCoralRedByHSL = ((h >= 335 || h <= 20) && s >= 25 && l >= 30 && l <= 82);
 
@@ -140,12 +132,12 @@ export default function App() {
     });
 
     return {
-      atk: Math.min(15, Math.max(0, ivs[0] ?? 10)),
-      def: Math.min(15, Math.max(0, ivs[1] ?? 10)),
-      hp: Math.min(15, Math.max(0, ivs[2] ?? 10))
+      atk: Math.min(15, Math.max(0, ivs[0] ?? 0)),
+      def: Math.min(15, Math.max(0, ivs[1] ?? 0)),
+      hp: Math.min(15, Math.max(0, ivs[2] ?? 0))
     };
   };
-   // 1. Helper to parse moves from a moveset screenshot
+
   const extractMovesFromCanvas = async (worker, canvas) => {
     const mW = Math.round(canvas.width * 0.85);
     const mH = Math.round(canvas.height * 0.28);
@@ -184,7 +176,6 @@ export default function App() {
     return { fast, charged };
   };
 
-  // 2. Multi-screenshot handler (Replaces processScreenshot)
   const handleFilesSelected = async (fileList) => {
     if (!fileList || fileList.length === 0) return;
     setIsProcessing(true);
@@ -192,14 +183,27 @@ export default function App() {
     const files = Array.from(fileList);
     setStatusMsg(`Loading ${files.length} screenshot(s)...`);
 
-    let combinedRecord = activeRecord ? { ...activeRecord } : null;
+    let current = activeRecord ? { ...activeRecord } : {
+      id: 'poke_' + Date.now(),
+      name: '',
+      cp: 0,
+      atk: 0,
+      def: 0,
+      hp: 0,
+      ivPercentage: 0,
+      fastMove: '',
+      chargedMove: '',
+      tags: [],
+      screenshot: '',
+      createdAt: Date.now()
+    };
 
     try {
       const worker = await createWorker('eng');
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        setStatusMsg(`Analyzing image ${i + 1} of ${files.length}...`);
+        setStatusMsg(`Analyzing screenshot ${i + 1} of ${files.length}...`);
 
         const img = new Image();
         const dataUrl = await new Promise((res) => {
@@ -266,51 +270,32 @@ export default function App() {
           const totalIv = ivs.atk + ivs.def + ivs.hp;
           const ivPct = parseFloat(((totalIv / 45) * 100).toFixed(1));
 
-          combinedRecord = {
-            id: combinedRecord?.id || 'poke_' + Date.now(),
-            name: cleanName.length >= 3 ? cleanName : (combinedRecord?.name || 'Dialga'),
-            cp: cpMatch ? parseInt(cpMatch[0], 10) : (combinedRecord?.cp || 2276),
-            atk: ivs.atk,
-            def: ivs.def,
-            hp: ivs.hp,
-            ivPercentage: ivPct,
-            fastMove: combinedRecord?.fastMove || '',
-            chargedMove: combinedRecord?.chargedMove || '',
-            tags: combinedRecord?.tags || [],
-            screenshot: dataUrl,
-            createdAt: Date.now()
-          };
+          current.atk = ivs.atk;
+          current.def = ivs.def;
+          current.hp = ivs.hp;
+          current.ivPercentage = ivPct;
+          if (cleanName.length >= 3) current.name = cleanName;
+          if (cpMatch) current.cp = parseInt(cpMatch[0], 10);
+          current.screenshot = dataUrl;
         } else {
           setStatusMsg('Reading Moveset...');
           const moves = await extractMovesFromCanvas(worker, canvas);
-
-          combinedRecord = {
-            id: combinedRecord?.id || 'poke_' + Date.now(),
-            name: combinedRecord?.name || 'Dialga',
-            cp: combinedRecord?.cp || 2276,
-            atk: combinedRecord?.atk || 0,
-            def: combinedRecord?.def || 0,
-            hp: combinedRecord?.hp || 0,
-            ivPercentage: combinedRecord?.ivPercentage || 0,
-            fastMove: moves.fast || combinedRecord?.fastMove || 'Metal Claw',
-            chargedMove: moves.charged || combinedRecord?.chargedMove || 'Draco Meteor',
-            tags: combinedRecord?.tags || [],
-            screenshot: combinedRecord?.screenshot || dataUrl,
-            createdAt: Date.now()
-          };
+          if (moves.fast) current.fastMove = moves.fast;
+          if (moves.charged) current.chargedMove = moves.charged;
+          if (!current.screenshot) current.screenshot = dataUrl;
         }
       }
 
-      const currentCP = combinedRecord.cp || 0;
+      if (!current.name) current.name = 'Pokémon';
       const tags = [];
-      if (combinedRecord.atk + combinedRecord.def + combinedRecord.hp === 45) tags.push('Hundo (100%)');
-      if (currentCP <= 1500) tags.push('Great League');
-      else if (currentCP <= 2500) tags.push('Ultra League');
+      if (current.atk + current.def + current.hp === 45) tags.push('Hundo (100%)');
+      if (current.cp <= 1500) tags.push('Great League');
+      else if (current.cp <= 2500) tags.push('Ultra League');
       else tags.push('Master League');
-      combinedRecord.tags = tags;
+      current.tags = tags;
 
       await worker.terminate();
-      setActiveRecord(combinedRecord);
+      setActiveRecord(current);
       setIsModalOpen(true);
     } catch (err) {
       console.error(err);
@@ -319,12 +304,14 @@ export default function App() {
       setStatusMsg('');
     }
   };
+
   const handleSaveModal = async () => {
     if (!activeRecord) return;
     await saveRecord(activeRecord);
     await loadAll();
     setIsModalOpen(false);
     setActiveRecord(null);
+    setDebugCropUrl(null);
   };
 
   const handleDelete = async (id, e) => {
@@ -405,12 +392,12 @@ export default function App() {
             </label>
             <label className="cursor-pointer flex items-center gap-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 px-4 py-2 rounded-xl text-sm font-semibold shadow-md active:scale-95 transition-all">
               <Upload className="w-4 h-4" />
-              <span>Scan Screenshot</span>
+              <span>Scan Screenshot(s)</span>
               <input 
                 type="file" 
                 accept="image/*" 
-                className="hidden" 
                 multiple
+                className="hidden" 
                 onChange={(e) => e.target.files && handleFilesSelected(e.target.files)}
               />
             </label>
@@ -526,12 +513,14 @@ export default function App() {
                     </span>
                   ))}
                 </div>
-                <button
-                  onClick={() => setInspectedImage(item.screenshot)}
-                  className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-medium"
-                >
-                  <ImageIcon className="w-3 h-3" /> View Pic
-                </button>
+                {item.screenshot && (
+                  <button
+                    onClick={() => setInspectedImage(item.screenshot)}
+                    className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-medium"
+                  >
+                    <ImageIcon className="w-3 h-3" /> View Pic
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -539,7 +528,7 @@ export default function App() {
           {filteredRecords.length === 0 && !isProcessing && (
             <div className="col-span-full py-16 text-center text-slate-500">
               <Layers className="w-12 h-12 mx-auto mb-3 opacity-30" />
-              <p>No Pokémon recorded yet. Click "Scan Screenshot" to upload.</p>
+              <p>No Pokémon recorded yet. Select one or both screenshots above to scan.</p>
             </div>
           )}
         </div>
@@ -570,7 +559,7 @@ export default function App() {
                     type="text"
                     value={activeRecord.name}
                     onChange={(e) => setActiveRecord({ ...activeRecord, name: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
                   />
                 </div>
                 <div>
@@ -579,7 +568,7 @@ export default function App() {
                     type="number"
                     value={activeRecord.cp}
                     onChange={(e) => setActiveRecord({ ...activeRecord, cp: parseInt(e.target.value, 10) || 0 })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
                   />
                 </div>
               </div>
@@ -614,35 +603,41 @@ export default function App() {
               </div>
 
               <div className="bg-slate-950 p-4 rounded-xl space-y-3">
-  <div className="flex items-center justify-between mb-1">
-    <span className="text-xs font-bold text-slate-300">Moveset</span>
-    <label className="cursor-pointer text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-semibold">
-      <Upload className="w-3 h-3" />
-      <span>Scan Moveset Pic</span>
-      <input
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={(e) => e.target.files?.[0] && handleFilesSelected([e.target.files[0]])}
-      />
-    </label>
-  </div>
-                  <label className="text-xs text-slate-400 block mb-1">Fast Attack</label>
-                  <input
-                    type="text"
-                    value={activeRecord.fastMove}
-                    onChange={(e) => setActiveRecord({ ...activeRecord, fastMove: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
-                  />
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold text-slate-300">Moveset</span>
+                  <label className="cursor-pointer text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-semibold">
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Attach Moveset Pic</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => e.target.files?.[0] && handleFilesSelected([e.target.files[0]])}
+                    />
+                  </label>
                 </div>
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">Charged Attack</label>
-                  <input
-                    type="text"
-                    value={activeRecord.chargedMove}
-                    onChange={(e) => setActiveRecord({ ...activeRecord, chargedMove: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
-                  />
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] text-slate-400 block mb-1">Fast Attack</label>
+                    <input
+                      type="text"
+                      value={activeRecord.fastMove}
+                      placeholder="e.g. Metal Claw"
+                      onChange={(e) => setActiveRecord({ ...activeRecord, fastMove: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-400 block mb-1">Charged Attack</label>
+                    <input
+                      type="text"
+                      value={activeRecord.chargedMove}
+                      placeholder="e.g. Draco Meteor"
+                      onChange={(e) => setActiveRecord({ ...activeRecord, chargedMove: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
