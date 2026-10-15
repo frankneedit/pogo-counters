@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
 
-// Expanded Raid Boss Database
 const RAID_BOSS_COUNTERS = {
   "Rayquaza": {
     types: ["Dragon", "Flying"],
@@ -94,6 +93,60 @@ const RAID_BOSS_COUNTERS = {
   }
 };
 
+// Canvas helper to downscale and boost contrast so OCR succeeds on mobile
+function preprocessImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+
+        // Resize down to max width 1000px so mobile wasm doesn't crash
+        const maxDim = 1000;
+        let width = img.width;
+        let height = img.height;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        ctx.drawImage(img, 0, 0, width, height);
+
+        // Convert to grayscale & contrast enhance
+        const imgData = ctx.getImageData(0, 0, width, height);
+        const d = imgData.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+          // Simple contrast stretch
+          const contrast = gray > 140 ? 255 : gray < 70 ? 0 : gray;
+          d[i] = contrast;
+          d[i + 1] = contrast;
+          d[i + 2] = contrast;
+        }
+        ctx.putImageData(imgData, 0, 0);
+
+        canvas.toBlob((blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error("Canvas conversion failed"));
+        }, "image/jpeg", 0.9);
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("search");
   const [inventory, setInventory] = useState(() => {
@@ -104,11 +157,9 @@ export default function App() {
     ];
   });
 
-  // Search Boss State
   const [bossQuery, setBossQuery] = useState("");
   const [selectedBoss, setSelectedBoss] = useState("Rayquaza");
 
-  // Form State
   const [formData, setFormData] = useState({
     name: "",
     cp: "",
@@ -120,487 +171,40 @@ export default function App() {
     chargedMove: ""
   });
 
-  // Image Upload / OCR State
   const [ocrStatus, setOcrStatus] = useState("");
   const [isScanning, setIsScanning] = useState(false);
   const [uploadedPreview, setUploadedPreview] = useState(null);
+  const [rawOcrText, setRawOcrText] = useState("");
 
   useEffect(() => {
     localStorage.setItem("pogo_inventory", JSON.stringify(inventory));
   }, [inventory]);
 
-  // Filtered boss suggestions for search input
   const bossList = Object.keys(RAID_BOSS_COUNTERS);
   const filteredBosses = useMemo(() => {
     if (!bossQuery.trim()) return bossList;
     return bossList.filter((b) => b.toLowerCase().includes(bossQuery.toLowerCase()));
   }, [bossQuery, bossList]);
 
-  // Handle OCR Screenshot Upload
   const handleImageUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setUploadedPreview(URL.createObjectURL(file));
     setIsScanning(true);
-    setOcrStatus("Loading OCR scanner...");
+    setRawOcrText("");
+    setOcrStatus("Compressing and enhancing image for OCR...");
 
     try {
       if (!window.Tesseract) {
-        throw new Error("Tesseract engine not loaded. Check internet connection.");
+        throw new Error("OCR library not ready. Check internet connection.");
       }
 
-      setOcrStatus("Analyzing image text (this takes 3-5 seconds)...");
-      const result = await window.Tesseract.recognize(file, "eng", {
+      // 1. Optimize image through Canvas first
+      const processedBlob = await preprocessImage(file);
+
+      // 2. Run Tesseract recognition
+      setOcrStatus("Reading text...");
+      const worker = await window.Tesseract.createWorker({
         logger: (m) => {
-          if (m.status === "recognizing text") {
-            setOcrStatus(`Scanning: ${Math.round(m.progress * 100)}%`);
-          }
-        }
-      });
-
-      const rawText = result.data.text;
-      const lines = rawText.split("\n").map((l) => l.trim()).filter(Boolean);
-
-      // 1. Detect CP (e.g., "CP 3120" or "CP3120")
-      const cpMatch = rawText.match(/CP\s*([0-9]{2,4})/i) || rawText.match(/([0-9]{3,4})\s*CP/i);
-      const extractedCp = cpMatch ? cpMatch[1] : "";
-
-      // 2. Detect Form (Shadow / Purified)
-      let detectedForm = "Regular";
-      if (/shadow/i.test(rawText) || /frustration/i.test(rawText)) detectedForm = "Shadow";
-      if (/purified/i.test(rawText) || /return/i.test(rawText)) detectedForm = "Purified";
-
-      // 3. Match Species from known Pokémon / Boss list
-      let matchedName = "";
-      for (const boss of bossList) {
-        if (new RegExp(boss, "i").test(rawText)) {
-          matchedName = boss;
-          break;
-        }
-      }
-      if (!matchedName) {
-        // Fallback: look at prominent line around CP
-        for (const line of lines) {
-          if (!/cp|hp|weight|height|stardust|candy/i.test(line) && line.length >= 3 && line.length <= 16) {
-            matchedName = line.replace(/[^a-zA-Z\s]/g, "").trim();
-            break;
-          }
-        }
-      }
-
-      // Update Form Fields
-      setFormData((prev) => ({
-        ...prev,
-        name: matchedName || prev.name,
-        cp: extractedCp || prev.cp,
-        form: detectedForm
-      }));
-
-      setOcrStatus("Text parsed successfully! Review stats below.");
-    } catch (err) {
-      console.error(err);
-      setOcrStatus("Failed to scan screenshot. You can enter details manually.");
-    } finally {
-      setIsScanning(false);
-    }
-  };
-
-  const handleAddPokemon = (e) => {
-    e.preventDefault();
-    if (!formData.name) return;
-    const newEntry = {
-      ...formData,
-      id: Date.now(),
-      cp: Number(formData.cp) || 0,
-      ivAtk: Number(formData.ivAtk),
-      ivDef: Number(formData.ivDef),
-      ivHp: Number(formData.ivHp)
-    };
-    setInventory([newEntry, ...inventory]);
-    setFormData({ name: "", cp: "", form: "Regular", ivAtk: 15, ivDef: 15, ivHp: 15, fastMove: "", chargedMove: "" });
-    setUploadedPreview(null);
-    setOcrStatus("");
-    setActiveTab("inventory");
-  };
-
-  const removePokemon = (id) => {
-    setInventory(inventory.filter((p) => p.id !== id));
-  };
-
-  const findOwnedCounters = (counterName) => {
-    return inventory.filter(
-      (item) =>
-        item.name.toLowerCase().includes(counterName.toLowerCase()) ||
-        counterName.toLowerCase().includes(item.name.toLowerCase())
-    );
-  };
-
-  const activeBossData = RAID_BOSS_COUNTERS[selectedBoss];
-
-  return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
-      {/* Header */}
-      <header className="bg-slate-800 border-b border-slate-700 px-6 py-4 flex flex-wrap justify-between items-center gap-4">
-        <h1 className="text-xl font-bold tracking-wide text-amber-400 flex items-center gap-2">
-          ⚡ PoGo Counter Scout
-        </h1>
-        <div className="flex bg-slate-900 rounded-lg p-1 border border-slate-700">
-          <button
-            onClick={() => setActiveTab("search")}
-            className={`px-4 py-1.5 text-sm font-semibold rounded-md transition ${
-              activeTab === "search" ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"
-            }`}
-          >
-            Counters
-          </button>
-          <button
-            onClick={() => setActiveTab("add")}
-            className={`px-4 py-1.5 text-sm font-semibold rounded-md transition ${
-              activeTab === "add" ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"
-            }`}
-          >
-            + Add / Scan
-          </button>
-          <button
-            onClick={() => setActiveTab("inventory")}
-            className={`px-4 py-1.5 text-sm font-semibold rounded-md transition ${
-              activeTab === "inventory" ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"
-            }`}
-          >
-            My Box ({inventory.length})
-          </button>
-        </div>
-      </header>
-
-      {/* Main Body */}
-      <main className="p-6 max-w-5xl mx-auto w-full flex-1">
-        {/* TAB 1: SEARCHABLE COUNTER FINDER */}
-        {activeTab === "search" && (
-          <div className="space-y-6">
-            {/* Search Input Bar */}
-            <div className="bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4">
-              <div>
-                <label className="text-xs uppercase text-slate-400 font-bold block mb-1">
-                  Type Raid Boss Name (Live Search)
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="Search e.g. Rayquaza, Kyogre, Necrozma..."
-                    value={bossQuery}
-                    onChange={(e) => setBossQuery(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white font-medium focus:outline-none focus:border-amber-400 pl-10"
-                  />
-                  <span className="absolute left-3 top-2.5 text-slate-400 text-lg">🔍</span>
-                </div>
-              </div>
-
-              {/* Boss Pills Filter */}
-              <div className="flex flex-wrap gap-2">
-                {filteredBosses.length > 0 ? (
-                  filteredBosses.map((boss) => (
-                    <button
-                      key={boss}
-                      onClick={() => {
-                        setSelectedBoss(boss);
-                        setBossQuery("");
-                      }}
-                      className={`px-3 py-1 text-xs rounded-full font-semibold border transition ${
-                        selectedBoss === boss
-                          ? "bg-amber-500 text-slate-950 border-amber-400 shadow"
-                          : "bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-500"
-                      }`}
-                    >
-                      {boss}
-                    </button>
-                  ))
-                ) : (
-                  <span className="text-xs text-rose-400">No boss matching "{bossQuery}"</span>
-                )}
-              </div>
-
-              {/* Active Boss Type Info */}
-              {activeBossData && (
-                <div className="pt-3 border-t border-slate-700 flex flex-wrap gap-6 text-sm">
-                  <div>
-                    <span className="text-slate-400 text-xs block">Active Boss:</span>
-                    <span className="font-bold text-amber-400 text-base">{selectedBoss}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 text-xs block">Types:</span>
-                    <span className="font-semibold">{activeBossData.types.join(" / ")}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 text-xs block">Weaknesses:</span>
-                    <span className="font-semibold text-rose-400">{activeBossData.weaknesses.join(", ")}</span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Counter Cards */}
-            {activeBossData ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {activeBossData.counters.map((c, idx) => {
-                  const owned = findOwnedCounters(c.name);
-                  const isOwned = owned.length > 0;
-
-                  return (
-                    <div
-                      key={idx}
-                      className={`p-4 rounded-xl border transition relative ${
-                        isOwned
-                          ? "bg-emerald-950/30 border-emerald-500/80 ring-1 ring-emerald-500/40"
-                          : "bg-slate-800 border-slate-700"
-                      }`}
-                    >
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 className="font-bold text-lg">{c.name}</h3>
-                            <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300 font-mono">
-                              {c.tier}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-400 mt-1">
-                            Moves: <span className="text-slate-200">{c.fast}</span> + <span className="text-slate-200">{c.charged}</span>
-                          </p>
-                        </div>
-
-                        {isOwned ? (
-                          <span className="bg-emerald-500 text-slate-950 text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wider shadow">
-                            ✓ Ready ({owned.length})
-                          </span>
-                        ) : (
-                          <span className="text-xs text-slate-500 italic">Not in Box</span>
-                        )}
-                      </div>
-
-                      {/* Display Matching User Pokémon */}
-                      {isOwned && (
-                        <div className="mt-3 pt-3 border-t border-emerald-900/50 space-y-1">
-                          <p className="text-xs font-bold text-emerald-400 uppercase">Available in Box:</p>
-                          {owned.map((p) => (
-                            <div key={p.id} className="text-xs bg-emerald-950/60 p-2 rounded flex justify-between items-center text-emerald-200">
-                              <span>
-                                {p.form !== "Regular" && <strong className="text-amber-400">[{p.form}] </strong>}
-                                <strong>CP {p.cp}</strong> | {p.fastMove || "Fast"} / {p.chargedMove || "Charged"}
-                              </span>
-                              <span className="font-mono bg-emerald-900 px-1.5 py-0.5 rounded">
-                                {p.ivAtk}/{p.ivDef}/{p.ivHp} ({Math.round(((p.ivAtk + p.ivDef + p.ivHp) / 45) * 100)}%)
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
-        )}
-
-        {/* TAB 2: ADD / SCAN SCREENSHOT */}
-        {activeTab === "add" && (
-          <div className="bg-slate-800 border border-slate-700 rounded-xl p-6 max-w-xl mx-auto shadow-xl space-y-6">
-            <div>
-              <h2 className="text-lg font-bold text-amber-400 mb-1">Add or Scan Pokémon</h2>
-              <p className="text-xs text-slate-400">
-                Upload a screenshot from Pokémon GO (appraisal or stat page) to auto-extract info, or fill in the values below.
-              </p>
-            </div>
-
-            {/* Screenshot Dropzone */}
-            <div className="border-2 border-dashed border-slate-600 hover:border-amber-400 rounded-xl p-4 text-center bg-slate-900/50">
-              <input
-                type="file"
-                accept="image/*"
-                id="screenshot-input"
-                onChange={handleImageUpload}
-                className="hidden"
-              />
-              <label htmlFor="screenshot-input" className="cursor-pointer block">
-                {uploadedPreview ? (
-                  <div className="space-y-2">
-                    <img src={uploadedPreview} alt="Preview" className="max-h-48 mx-auto rounded shadow border border-slate-700" />
-                    <span className="text-xs text-amber-400 underline block">Tap to pick another image</span>
-                  </div>
-                ) : (
-                  <div className="py-4">
-                    <span className="text-3xl block mb-2">📸</span>
-                    <span className="text-sm font-semibold text-slate-300 block">Tap to upload Appraisal Screenshot</span>
-                    <span className="text-xs text-slate-500">Auto-detects CP, Species Name, and Shadow status</span>
-                  </div>
-                )}
-              </label>
-
-              {ocrStatus && (
-                <div className={`mt-3 text-xs font-semibold ${isScanning ? "text-amber-400 animate-pulse" : "text-emerald-400"}`}>
-                  {ocrStatus}
-                </div>
-              )}
-            </div>
-
-            {/* Verified Form */}
-            <form onSubmit={handleAddPokemon} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-bold text-slate-300 block mb-1">Species Name</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Mamoswine"
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm focus:border-amber-400 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-slate-300 block mb-1">CP</label>
-                  <input
-                    type="number"
-                    placeholder="e.g. 3120"
-                    value={formData.cp}
-                    onChange={(e) => setFormData({ ...formData, cp: e.target.value })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm focus:border-amber-400 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1">Form / Variant</label>
-                <div className="flex gap-2">
-                  {["Regular", "Shadow", "Purified", "Mega"].map((f) => (
-                    <button
-                      key={f}
-                      type="button"
-                      onClick={() => setFormData({ ...formData, form: f })}
-                      className={`flex-1 py-1.5 text-xs rounded-lg font-bold border transition ${
-                        formData.form === f
-                          ? "bg-amber-500 border-amber-400 text-slate-950"
-                          : "bg-slate-900 border-slate-700 text-slate-300"
-                      }`}
-                    >
-                      {f}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Appraisal IV Bars */}
-              <div className="bg-slate-900 p-4 rounded-lg border border-slate-700 space-y-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-amber-400 block">Appraisal (IVs / 15)</span>
-                {[
-                  { key: "ivAtk", label: "Attack" },
-                  { key: "ivDef", label: "Defense" },
-                  { key: "ivHp", label: "HP" }
-                ].map(({ key, label }) => (
-                  <div key={key} className="flex items-center gap-3">
-                    <span className="text-xs font-semibold w-16 text-slate-300">{label}:</span>
-                    <input
-                      type="range"
-                      min="0"
-                      max="15"
-                      value={formData[key]}
-                      onChange={(e) => setFormData({ ...formData, [key]: Number(e.target.value) })}
-                      className="flex-1 accent-amber-500"
-                    />
-                    <span className="text-xs font-mono font-bold w-6 text-right">{formData[key]}</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Moveset Inputs */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-bold text-slate-300 block mb-1">Fast Move</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Powder Snow"
-                    value={formData.fastMove}
-                    onChange={(e) => setFormData({ ...formData, fastMove: e.target.value })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm focus:border-amber-400 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-slate-300 block mb-1">Charged Move</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Avalanche"
-                    value={formData.chargedMove}
-                    onChange={(e) => setFormData({ ...formData, chargedMove: e.target.value })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm focus:border-amber-400 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                className="w-full mt-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-2.5 rounded-lg shadow transition"
-              >
-                Save to My Box
-              </button>
-            </form>
-          </div>
-        )}
-
-        {/* TAB 3: INVENTORY */}
-        {activeTab === "inventory" && (
-          <div className="space-y-4">
-            <div className="flex justify-between items-center">
-              <h2 className="text-lg font-bold">My Pokémon Box ({inventory.length})</h2>
-              <button
-                onClick={() => setActiveTab("add")}
-                className="text-xs bg-slate-800 hover:bg-slate-700 border border-slate-600 px-3 py-1.5 rounded-lg"
-              >
-                + Add / Scan Another
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {inventory.map((p) => {
-                const totalIV = p.ivAtk + p.ivDef + p.ivHp;
-                const ivPercent = Math.round((totalIV / 45) * 100);
-
-                return (
-                  <div key={p.id} className="bg-slate-800 border border-slate-700 rounded-xl p-4 flex flex-col justify-between">
-                    <div>
-                      <div className="flex justify-between items-start mb-2">
-                        <div>
-                          <span className="text-xs text-amber-400 font-bold">{p.form}</span>
-                          <h3 className="font-bold text-lg">{p.name}</h3>
-                        </div>
-                        <span className="text-sm font-mono font-extrabold text-slate-300">CP {p.cp}</span>
-                      </div>
-
-                      <div className="text-xs text-slate-400 space-y-1 my-3 bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/50">
-                        <div>⚔️ Fast: <span className="text-slate-200">{p.fastMove || "Not Set"}</span></div>
-                        <div>💥 Charged: <span className="text-slate-200">{p.chargedMove || "Not Set"}</span></div>
-                      </div>
-
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-slate-400">IV: {p.ivAtk}/{p.ivDef}/{p.ivHp}</span>
-                        <span className={`font-bold ${ivPercent === 100 ? "text-amber-400" : "text-emerald-400"}`}>
-                          {ivPercent}% {ivPercent === 100 ? "★ 4★ (Hundo)" : totalIV >= 37 ? "★ 3★" : ""}
-                        </span>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => removePokemon(p.id)}
-                      className="mt-4 text-xs text-rose-400 hover:text-rose-300 text-right w-full"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </main>
-    </div>
-  );
-}
+          if (m.status === "
