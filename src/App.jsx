@@ -193,6 +193,33 @@ export default function App() {
       charged: candidateLines[1] || ''
     };
   };
+  // Helper to reliably check if a screenshot is an Appraisal screen
+  const checkIfAppraisal = (canvas) => {
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
+
+    // Check the circular badge area (Y: 62% - 74%, X: 3% - 28%)
+    // The 3-star badge has distinct orange/gold badge colors (Hue ~28-48, Sat > 50%)
+    let badgeGoldPixels = 0;
+    const badgeX = Math.round(W * 0.12);
+    const badgeYStart = Math.round(H * 0.62);
+    const badgeYEnd = Math.round(H * 0.74);
+
+    for (let y = badgeYStart; y <= badgeYEnd; y += 3) {
+      for (let x = Math.round(W * 0.05); x <= Math.round(W * 0.25); x += 3) {
+        const pixel = ctx.getImageData(x, y, 1, 1).data;
+        const [h, s, l] = rgbToHsl(pixel[0], pixel[1], pixel[2]);
+        if (h >= 24 && h <= 50 && s >= 45 && l >= 35 && l <= 85) {
+          badgeGoldPixels++;
+        }
+      }
+    }
+
+    // A real appraisal screen will have hundreds of gold badge pixels
+    return badgeGoldPixels > 35;
+  };
+
   const handleFilesSelected = async (fileList) => {
     if (!fileList || fileList.length === 0) return;
     setIsProcessing(true);
@@ -200,6 +227,7 @@ export default function App() {
     const files = Array.from(fileList);
     setStatusMsg(`Loading ${files.length} screenshot(s)...`);
 
+    // Reset old moves if scanning a fresh Pokémon from the header
     let current = activeRecord ? { ...activeRecord } : {
       id: 'poke_' + Date.now(),
       name: '',
@@ -237,12 +265,14 @@ export default function App() {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0);
 
-        const ivs = analyzeIVBars(canvas);
-        const hasAppraisalCard = (ivs.atk > 0 || ivs.def > 0 || ivs.hp > 0);
+        // Solid detection: does it have the 3-star badge?
+        const isAppraisal = checkIfAppraisal(canvas);
 
-        if (hasAppraisalCard) {
-          setStatusMsg('Reading IVs, Species & CP...');
+        if (isAppraisal) {
+          setStatusMsg('Detected Appraisal Screen: Reading IVs & CP...');
+          const ivs = analyzeIVBars(canvas);
 
+          // 1. CP Crop (Top Arc)
           const cpCanvas = document.createElement('canvas');
           const cpW = Math.round(canvas.width * 0.45);
           const cpH = Math.round(canvas.height * 0.08);
@@ -257,6 +287,7 @@ export default function App() {
           const cpRes = await worker.recognize(cpCanvas);
           const cpMatch = cpRes.data.text.match(/\d{3,4}/);
 
+          // 2. Species Name Crop
           const nameCanvas = document.createElement('canvas');
           const nW = Math.round(canvas.width * 0.6);
           const nH = Math.round(canvas.height * 0.06);
@@ -271,6 +302,7 @@ export default function App() {
           const nameRes = await worker.recognize(nameCanvas);
           const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
 
+          // 3. Debug Thumbnail
           const dW = Math.round(canvas.width * 0.40);
           const dH = Math.round(canvas.height * 0.14);
           const debugCanvas = document.createElement('canvas');
@@ -295,7 +327,8 @@ export default function App() {
           if (cpMatch) current.cp = parseInt(cpMatch[0], 10);
           current.screenshot = dataUrl;
         } else {
-          setStatusMsg('Reading Moveset...');
+          // This is a Moveset Screen
+          setStatusMsg('Detected Moveset Screen: Extracting Attacks...');
           const moves = await extractMovesFromCanvas(worker, canvas);
           if (moves.fast) current.fastMove = moves.fast;
           if (moves.charged) current.chargedMove = moves.charged;
@@ -410,13 +443,17 @@ export default function App() {
             <label className="cursor-pointer flex items-center gap-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 px-4 py-2 rounded-xl text-sm font-semibold shadow-md active:scale-95 transition-all">
               <Upload className="w-4 h-4" />
               <span>Scan Screenshot(s)</span>
-              <input 
-                type="file" 
-                accept="image/*" 
-                multiple
-                className="hidden" 
-                onChange={(e) => e.target.files && handleFilesSelected(e.target.files)}
-              />
+             <input
+  type="file"
+  accept="image/*"
+  className="hidden"
+  onChange={(e) => {
+    if (e.target.files?.[0]) {
+      handleFilesSelected([e.target.files[0]]);
+      e.target.value = ''; // Reset so you can re-upload if needed
+    }
+  }}
+/>
             </label>
           </div>
         </div>
