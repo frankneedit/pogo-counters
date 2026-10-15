@@ -97,27 +97,37 @@ export default function App() {
     const W = canvas.width;
     const H = canvas.height;
 
+    // Horizontal bounds of the stat bars inside the white card
     const startX = Math.round(W * 0.118);
     const endX = Math.round(W * 0.462);
     const totalBarWidth = endX - startX;
 
-    const barYPercentages = [0.784, 0.823, 0.862];
+    // Vertical scan positions for Attack, Defense, HP
+    // Adjusted Attack slightly higher (0.778) to sit right in the center of the bar
+    const barYPercentages = [0.778, 0.823, 0.862];
 
     const ivs = barYPercentages.map((yPct) => {
       const yCenter = Math.round(H * yPct);
       let filledPixels = 0;
-      const offsets = [-3, -1, 0, 1, 3];
+      // Thicker vertical sampling window to guarantee hitting the bar core
+      const offsets = [-4, -2, -1, 0, 1, 2, 4];
 
       for (let x = startX; x <= endX; x++) {
         let isFilled = false;
         for (let dy of offsets) {
           const pixel = ctx.getImageData(x, yCenter + dy, 1, 1).data;
-          const [h, s, l] = rgbToHsl(pixel[0], pixel[1], pixel[2]);
+          const [r, g, b] = [pixel[0], pixel[1], pixel[2]];
+          const [h, s, l] = rgbToHsl(r, g, b);
 
-          const isOrange = (h >= 18 && h <= 50 && s >= 35 && l >= 28 && l <= 78);
-          const isMaxRed = ((h >= 340 || h <= 15) && s >= 40 && l >= 32 && l <= 75);
+          // 1. In-game Orange (partial fill):
+          const isOrange = (h >= 16 && h <= 55 && s >= 30 && l >= 25 && l <= 80);
+          
+          // 2. Coral Pink/Red (Maxed 15 IV):
+          // High red channel with noticeably lower blue/green: r > 180 and r > g + 35
+          const isCoralRedByRGB = (r > 175 && r > g + 30 && r > b + 30 && l <= 85);
+          const isCoralRedByHSL = ((h >= 335 || h <= 20) && s >= 25 && l >= 30 && l <= 82);
 
-          if (isOrange || isMaxRed) {
+          if (isOrange || isCoralRedByRGB || isCoralRedByHSL) {
             isFilled = true;
             break;
           }
@@ -135,7 +145,6 @@ export default function App() {
       hp: Math.min(15, Math.max(0, ivs[2] ?? 10))
     };
   };
-
   const processScreenshot = async (file) => {
     setIsProcessing(true);
     setStatusMsg('Reading image file...');
