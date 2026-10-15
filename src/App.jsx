@@ -4,6 +4,68 @@ import {
   RefreshCw, X, Layers, Image as ImageIcon, Download, UploadCloud, Plus
 } from 'lucide-react';
 import { createWorker } from 'tesseract.js';
+
+// Official Pokémon type pill colors in Tailwind
+const TYPE_STYLES = {
+  Normal: "bg-stone-500/20 text-stone-300 border-stone-500/40",
+  Fire: "bg-orange-500/20 text-orange-400 border-orange-500/40",
+  Water: "bg-blue-500/20 text-blue-400 border-blue-500/40",
+  Grass: "bg-emerald-500/20 text-emerald-400 border-emerald-500/40",
+  Electric: "bg-yellow-500/20 text-yellow-300 border-yellow-500/40",
+  Ice: "bg-cyan-400/20 text-cyan-300 border-cyan-400/40",
+  Fighting: "bg-red-700/20 text-red-400 border-red-700/40",
+  Poison: "bg-purple-600/20 text-purple-300 border-purple-600/40",
+  Ground: "bg-amber-700/20 text-amber-300 border-amber-700/40",
+  Flying: "bg-indigo-400/20 text-indigo-300 border-indigo-400/40",
+  Psychic: "bg-pink-500/20 text-pink-300 border-pink-500/40",
+  Bug: "bg-lime-600/20 text-lime-400 border-lime-600/40",
+  Rock: "bg-stone-600/20 text-stone-300 border-stone-600/40",
+  Ghost: "bg-violet-800/20 text-violet-300 border-violet-800/40",
+  Dragon: "bg-indigo-700/20 text-indigo-300 border-indigo-700/40",
+  Steel: "bg-slate-400/20 text-slate-300 border-slate-400/40",
+  Fairy: "bg-rose-400/20 text-rose-300 border-rose-400/40",
+  Dark: "bg-neutral-800 text-neutral-300 border-neutral-700"
+};
+
+const getPokemonTypes = (name) => {
+  if (!name) return [];
+  const match = Object.keys(POKEMON_TYPES).find(k => k.toLowerCase() === name.toLowerCase().trim());
+  return match ? POKEMON_TYPES[match] : [];
+};
+
+// In-memory / localStorage cache so we don't query the API twice for the same Pokémon
+const typeCache = JSON.parse(localStorage.getItem('poke_type_cache') || '{}');
+
+export const fetchPokemonTypesOnline = async (speciesName) => {
+  if (!speciesName) return [];
+  const cleanName = speciesName.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+
+  // 1. Return from cache if already fetched
+  if (typeCache[cleanName]) {
+    return typeCache[cleanName];
+  }
+
+  try {
+    // 2. Query free PokéAPI directly
+    const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${cleanName}`);
+    if (!res.ok) throw new Error('Not found');
+
+    const data = await res.json();
+    // Capitalize type names: e.g. ["steel", "dragon"] -> ["Steel", "Dragon"]
+    const types = data.types.map(
+      (t) => t.type.name.charAt(0).toUpperCase() + t.type.name.slice(1)
+    );
+
+    // 3. Save to cache
+    typeCache[cleanName] = types;
+    localStorage.setItem('poke_type_cache', JSON.stringify(typeCache));
+
+    return types;
+  } catch (err) {
+    // Fallback if offline or species has special form suffix
+    return [];
+  }
+};
 /**
 const DB_NAME = 'PokeGoVaultDB';
 const DB_VERSION = 1;
@@ -72,6 +134,7 @@ const getAllRecords = async () => {
     id: row.id,
     name: row.name,
     cp: row.cp,
+    types: row.types || getPokemonTypes(row.name) || [],
     atk: row.atk,
     def: row.def,
     hp: row.hp,
@@ -89,6 +152,7 @@ const saveRecord = async (record) => {
     id: record.id,
     name: record.name,
     cp: record.cp,
+    types: record.types && record.types.length > 0 ? record.types : getPokemonTypes(record.name),
     atk: record.atk,
     def: record.def,
     hp: record.hp,
@@ -452,7 +516,11 @@ const matchNearestMove = (rawOcrText) => {
           );
           const nameRes = await worker.recognize(nameCanvas);
           const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
-
+          if (cleanName.length >= 3) {
+            current.name = cleanName;
+            setStatusMsg(`Fetching official types for ${cleanName}...`);
+            current.types = await fetchPokemonTypesOnline(cleanName);
+          }
           // Debug visual crop of the appraisal bars
           const dW = Math.round(canvas.width * 0.40);
           const dH = Math.round(canvas.height * 0.14);
@@ -528,24 +596,28 @@ const matchNearestMove = (rawOcrText) => {
     a.click();
   };
 
-  const importJSON = (file) => {
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const list = JSON.parse(e.target.result);
-        if (Array.isArray(list)) {
-          for (let item of list) {
-            await saveRecord(item);
-          }
-          await loadAll();
-          alert('Import completed successfully!');
+  const importJSON = async (file) => {
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    try {
+      const list = JSON.parse(e.target.result);
+      if (Array.isArray(list)) {
+        for (let item of list) {
+          const types = (item.types && item.types.length > 0)
+            ? item.types
+            : await fetchPokemonTypesOnline(item.name);
+
+          await saveRecord({ ...item, types });
         }
-      } catch (err) {
-        alert('Invalid JSON file format.');
+        await loadAll();
+        alert('Import completed with official types populated!');
       }
-    };
-    reader.readAsText(file);
+    } catch (err) {
+      alert('Invalid JSON file format.');
+    }
   };
+  reader.readAsText(file);
+};
 
   const filteredRecords = records.filter(r => {
     const matchesSearch = r.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
