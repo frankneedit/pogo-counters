@@ -139,29 +139,37 @@ export default function App() {
   };
 
   const extractMovesFromCanvas = async (worker, canvas) => {
-    const mW = Math.round(canvas.width * 0.85);
-    const mH = Math.round(canvas.height * 0.28);
+    // Crop directly to the moves section (below the GYMS & RAIDS tab)
+    const mW = Math.round(canvas.width * 0.75);
+    const mH = Math.round(canvas.height * 0.16);
     const moveCanvas = document.createElement('canvas');
     moveCanvas.width = mW;
     moveCanvas.height = mH;
     moveCanvas.getContext('2d').drawImage(
       canvas,
-      Math.round(canvas.width * 0.08),
-      Math.round(canvas.height * 0.68),
+      Math.round(canvas.width * 0.12),
+      Math.round(canvas.height * 0.81),
       mW, mH, 0, 0, mW, mH
     );
 
     const moveRes = await worker.recognize(moveCanvas);
     const lines = moveRes.data.lines
       .map(l => l.text.trim())
-      .filter(t => 
-        t.length >= 3 && 
-        !t.includes('150') && 
-        !t.includes('STARDUST') && 
-        !t.includes('CANDY') &&
-        !t.includes('POWER UP') &&
-        !t.includes('NEW ATTACK')
-      );
+      .filter(t => {
+        const up = t.toUpperCase();
+        return (
+          t.length >= 3 &&
+          !up.includes('GYM') &&
+          !up.includes('RAID') &&
+          !up.includes('TRAINER') &&
+          !up.includes('BATTLE') &&
+          !up.includes('STARDUST') &&
+          !up.includes('CANDY') &&
+          !up.includes('POWER') &&
+          !up.includes('ATTACK') &&
+          !/^\d+$/.test(t)
+        );
+      });
 
     let fast = '';
     let charged = '';
@@ -175,7 +183,6 @@ export default function App() {
 
     return { fast, charged };
   };
-
   const handleFilesSelected = async (fileList) => {
     if (!fileList || fileList.length === 0) return;
     setIsProcessing(true);
