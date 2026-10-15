@@ -145,114 +145,180 @@ export default function App() {
       hp: Math.min(15, Math.max(0, ivs[2] ?? 10))
     };
   };
-  const processScreenshot = async (file) => {
-    setIsProcessing(true);
-    setStatusMsg('Reading image file...');
-
-    const img = new Image();
-    const dataUrl = await new Promise((res) => {
-      const reader = new FileReader();
-      reader.onload = (e) => res(e.target.result);
-      reader.readAsDataURL(file);
-    });
-    img.src = dataUrl;
-    await new Promise((res) => (img.onload = res));
-
-    const canvas = document.createElement('canvas');
-    canvas.width = img.width;
-    canvas.height = img.height;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-
-    setStatusMsg('Measuring appraisal bars...');
-    const ivs = analyzeIVBars(canvas);
-
-    const dW = Math.round(canvas.width * 0.40);
-    const dH = Math.round(canvas.height * 0.14);
-    const debugCanvas = document.createElement('canvas');
-    debugCanvas.width = dW;
-    debugCanvas.height = dH;
-    debugCanvas.getContext('2d').drawImage(
+   // 1. Helper to parse moves from a moveset screenshot
+  const extractMovesFromCanvas = async (worker, canvas) => {
+    const mW = Math.round(canvas.width * 0.85);
+    const mH = Math.round(canvas.height * 0.28);
+    const moveCanvas = document.createElement('canvas');
+    moveCanvas.width = mW;
+    moveCanvas.height = mH;
+    moveCanvas.getContext('2d').drawImage(
       canvas,
-      Math.round(canvas.width * 0.10),
-      Math.round(canvas.height * 0.75),
-      dW, dH, 0, 0, dW, dH
+      Math.round(canvas.width * 0.08),
+      Math.round(canvas.height * 0.68),
+      mW, mH, 0, 0, mW, mH
     );
-    setDebugCropUrl(debugCanvas.toDataURL());
 
-    setStatusMsg('OCR reading CP & Species...');
-    let extractedCP = 1500;
-    let extractedName = 'Dialga';
-    let fastMove = 'Metal Claw';
-    let chargedMove = 'Draco Meteor';
+    const moveRes = await worker.recognize(moveCanvas);
+    const lines = moveRes.data.lines
+      .map(l => l.text.trim())
+      .filter(t => 
+        t.length >= 3 && 
+        !t.includes('150') && 
+        !t.includes('STARDUST') && 
+        !t.includes('CANDY') &&
+        !t.includes('POWER UP') &&
+        !t.includes('NEW ATTACK')
+      );
+
+    let fast = '';
+    let charged = '';
+
+    if (lines.length >= 1) {
+      fast = lines[0].replace(/[^a-zA-Z\s]/g, '').trim();
+    }
+    if (lines.length >= 2) {
+      charged = lines[1].replace(/[^a-zA-Z\s]/g, '').trim();
+    }
+
+    return { fast, charged };
+  };
+
+  // 2. Multi-screenshot handler (Replaces processScreenshot)
+  const handleFilesSelected = async (fileList) => {
+    if (!fileList || fileList.length === 0) return;
+    setIsProcessing(true);
+
+    const files = Array.from(fileList);
+    setStatusMsg(`Loading ${files.length} screenshot(s)...`);
+
+    let combinedRecord = activeRecord ? { ...activeRecord } : null;
 
     try {
       const worker = await createWorker('eng');
 
-      const cpW = Math.round(canvas.width * 0.45);
-      const cpH = Math.round(canvas.height * 0.08);
-      const cpCanvas = document.createElement('canvas');
-      cpCanvas.width = cpW;
-      cpCanvas.height = cpH;
-      cpCanvas.getContext('2d').drawImage(
-        canvas, 
-        Math.round(canvas.width * 0.28), 
-        Math.round(canvas.height * 0.045), 
-        cpW, cpH, 0, 0, cpW, cpH
-      );
-      const cpRes = await worker.recognize(cpCanvas);
-      const cpDigits = cpRes.data.text.match(/\d{3,4}/);
-      if (cpDigits) extractedCP = parseInt(cpDigits[0], 10);
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setStatusMsg(`Analyzing image ${i + 1} of ${files.length}...`);
 
-      const nW = Math.round(canvas.width * 0.6);
-      const nH = Math.round(canvas.height * 0.06);
-      const nameCanvas = document.createElement('canvas');
-      nameCanvas.width = nW;
-      nameCanvas.height = nH;
-      nameCanvas.getContext('2d').drawImage(
-        canvas, 
-        Math.round(canvas.width * 0.2), 
-        Math.round(canvas.height * 0.38), 
-        nW, nH, 0, 0, nW, nH
-      );
-      const nameRes = await worker.recognize(nameCanvas);
-      const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
-      if (cleanName.length >= 3) extractedName = cleanName;
+        const img = new Image();
+        const dataUrl = await new Promise((res) => {
+          const reader = new FileReader();
+          reader.onload = (e) => res(e.target.result);
+          reader.readAsDataURL(file);
+        });
+        img.src = dataUrl;
+        await new Promise((res) => (img.onload = res));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+
+        const ivs = analyzeIVBars(canvas);
+        const hasAppraisalCard = (ivs.atk > 0 || ivs.def > 0 || ivs.hp > 0);
+
+        if (hasAppraisalCard) {
+          setStatusMsg('Reading IVs, Species & CP...');
+
+          const cpCanvas = document.createElement('canvas');
+          const cpW = Math.round(canvas.width * 0.45);
+          const cpH = Math.round(canvas.height * 0.08);
+          cpCanvas.width = cpW;
+          cpCanvas.height = cpH;
+          cpCanvas.getContext('2d').drawImage(
+            canvas,
+            Math.round(canvas.width * 0.28),
+            Math.round(canvas.height * 0.045),
+            cpW, cpH, 0, 0, cpW, cpH
+          );
+          const cpRes = await worker.recognize(cpCanvas);
+          const cpMatch = cpRes.data.text.match(/\d{3,4}/);
+
+          const nameCanvas = document.createElement('canvas');
+          const nW = Math.round(canvas.width * 0.6);
+          const nH = Math.round(canvas.height * 0.06);
+          nameCanvas.width = nW;
+          nameCanvas.height = nH;
+          nameCanvas.getContext('2d').drawImage(
+            canvas,
+            Math.round(canvas.width * 0.2),
+            Math.round(canvas.height * 0.38),
+            nW, nH, 0, 0, nW, nH
+          );
+          const nameRes = await worker.recognize(nameCanvas);
+          const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
+
+          const dW = Math.round(canvas.width * 0.40);
+          const dH = Math.round(canvas.height * 0.14);
+          const debugCanvas = document.createElement('canvas');
+          debugCanvas.width = dW;
+          debugCanvas.height = dH;
+          debugCanvas.getContext('2d').drawImage(
+            canvas,
+            Math.round(canvas.width * 0.10),
+            Math.round(canvas.height * 0.75),
+            dW, dH, 0, 0, dW, dH
+          );
+          setDebugCropUrl(debugCanvas.toDataURL());
+
+          const totalIv = ivs.atk + ivs.def + ivs.hp;
+          const ivPct = parseFloat(((totalIv / 45) * 100).toFixed(1));
+
+          combinedRecord = {
+            id: combinedRecord?.id || 'poke_' + Date.now(),
+            name: cleanName.length >= 3 ? cleanName : (combinedRecord?.name || 'Dialga'),
+            cp: cpMatch ? parseInt(cpMatch[0], 10) : (combinedRecord?.cp || 2276),
+            atk: ivs.atk,
+            def: ivs.def,
+            hp: ivs.hp,
+            ivPercentage: ivPct,
+            fastMove: combinedRecord?.fastMove || '',
+            chargedMove: combinedRecord?.chargedMove || '',
+            tags: combinedRecord?.tags || [],
+            screenshot: dataUrl,
+            createdAt: Date.now()
+          };
+        } else {
+          setStatusMsg('Reading Moveset...');
+          const moves = await extractMovesFromCanvas(worker, canvas);
+
+          combinedRecord = {
+            id: combinedRecord?.id || 'poke_' + Date.now(),
+            name: combinedRecord?.name || 'Dialga',
+            cp: combinedRecord?.cp || 2276,
+            atk: combinedRecord?.atk || 0,
+            def: combinedRecord?.def || 0,
+            hp: combinedRecord?.hp || 0,
+            ivPercentage: combinedRecord?.ivPercentage || 0,
+            fastMove: moves.fast || combinedRecord?.fastMove || 'Metal Claw',
+            chargedMove: moves.charged || combinedRecord?.chargedMove || 'Draco Meteor',
+            tags: combinedRecord?.tags || [],
+            screenshot: combinedRecord?.screenshot || dataUrl,
+            createdAt: Date.now()
+          };
+        }
+      }
+
+      const currentCP = combinedRecord.cp || 0;
+      const tags = [];
+      if (combinedRecord.atk + combinedRecord.def + combinedRecord.hp === 45) tags.push('Hundo (100%)');
+      if (currentCP <= 1500) tags.push('Great League');
+      else if (currentCP <= 2500) tags.push('Ultra League');
+      else tags.push('Master League');
+      combinedRecord.tags = tags;
 
       await worker.terminate();
+      setActiveRecord(combinedRecord);
+      setIsModalOpen(true);
     } catch (err) {
-      console.warn('OCR error:', err);
+      console.error(err);
+    } finally {
+      setIsProcessing(false);
+      setStatusMsg('');
     }
-
-    const totalIv = ivs.atk + ivs.def + ivs.hp;
-    const ivPct = ((totalIv / 45) * 100).toFixed(1);
-
-    const tags = [];
-    if (totalIv === 45) tags.push('Hundo (100%)');
-    if (extractedCP <= 1500) tags.push('Great League');
-    else if (extractedCP <= 2500) tags.push('Ultra League');
-    else tags.push('Master League');
-
-    setActiveRecord({
-      id: 'poke_' + Date.now(),
-      name: extractedName,
-      cp: extractedCP,
-      atk: ivs.atk,
-      def: ivs.def,
-      hp: ivs.hp,
-      ivPercentage: parseFloat(ivPct),
-      fastMove,
-      chargedMove,
-      tags,
-      screenshot: dataUrl,
-      createdAt: Date.now()
-    });
-
-    setIsModalOpen(true);
-    setIsProcessing(false);
-    setStatusMsg('');
   };
-
   const handleSaveModal = async () => {
     if (!activeRecord) return;
     await saveRecord(activeRecord);
@@ -344,7 +410,8 @@ export default function App() {
                 type="file" 
                 accept="image/*" 
                 className="hidden" 
-                onChange={(e) => e.target.files?.[0] && processScreenshot(e.target.files[0])}
+                multiple
+                onChange={(e) => e.target.files && handleFilesSelected(e.target.files)}
               />
             </label>
           </div>
@@ -546,8 +613,20 @@ export default function App() {
                 ))}
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
+              <div className="bg-slate-950 p-4 rounded-xl space-y-3">
+  <div className="flex items-center justify-between mb-1">
+    <span className="text-xs font-bold text-slate-300">Moveset</span>
+    <label className="cursor-pointer text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-semibold">
+      <Upload className="w-3 h-3" />
+      <span>Scan Moveset Pic</span>
+      <input
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => e.target.files?.[0] && handleFilesSelected([e.target.files[0]])}
+      />
+    </label>
+  </div>
                   <label className="text-xs text-slate-400 block mb-1">Fast Attack</label>
                   <input
                     type="text"
