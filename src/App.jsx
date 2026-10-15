@@ -140,7 +140,79 @@ export default function App() {
       hp: ivs[2] ?? 0
     };
   };
+// Comprehensive list of Pokémon GO moves
+const KNOWN_MOVES = [
+  // Common Fast Moves
+  "Mud Shot", "Metal Claw", "Dragon Tail", "Dragon Breath", "Counter", 
+  "Shadow Claw", "Vine Whip", "Razor Leaf", "Water Gun", "Waterfall",
+  "Fire Fang", "Fire Spin", "Incinerate", "Bullet Punch", "Snarl",
+  "Bite", "Lick", "Psycho Cut", "Confusion", "Lock-On", "Thunder Shock",
+  "Volt Switch", "Spark", "Poison Jab", "Hex", "Air Slash", "Wing Attack",
+  "Gust", "Ice Shard", "Powder Snow", "Smack Down", "Rock Throw", "Mud-Slap",
 
+  // Common Charged Moves
+  "Earthquake", "Draco Meteor", "Precipice Blades", "Roar of Time", "Iron Head",
+  "Hydro Cannon", "Surf", "Origin Pulse", "Blast Burn", "Overheat",
+  "Fire Blast", "Frenzy Plant", "Solar Beam", "Energy Ball", "Grass Knot",
+  "Wild Charge", "Thunderbolt", "Thunder", "Zap Cannon", "Close Combat",
+  "Dynamic Punch", "Aura Sphere", "Superpower", "Cross Chop", "Shadow Ball",
+  "Dark Pulse", "Foul Play", "Crunch", "Psychic", "Psyshock", "Moonblast",
+  "Play Rough", "Dazzling Gleam", "Ice Beam", "Blizzard", "Avalanche",
+  "Stone Edge", "Rock Slide", "Sludge Bomb", "Sludge Wave", "Gunk Shot",
+  "Brave Bird", "Sky Attack", "Hurricane", "Fly", "Aeroblast", "Sacred Fire"
+];
+
+// Levenshtein Distance for typo & OCR noise tolerance
+const getSimilarity = (s1, s2) => {
+  const str1 = s1.toLowerCase().trim();
+  const str2 = s2.toLowerCase().trim();
+
+  // If one contains the other directly, give high priority
+  if (str1.includes(str2) || str2.includes(str1)) return 0.85;
+
+  const track = Array(str2.length + 1).fill(null).map(() =>
+    Array(str1.length + 1).fill(null)
+  );
+  for (let i = 0; i <= str1.length; i += 1) track[0][i] = i;
+  for (let j = 0; j <= str2.length; j += 1) track[j][0] = j;
+
+  for (let j = 1; j <= str2.length; j += 1) {
+    for (let i = 1; i <= str1.length; i += 1) {
+      const indicator = str1[i - 1] === str2[j - 1] ? 0 : 1;
+      track[j][i] = Math.min(
+        track[j][i - 1] + 1,
+        track[j - 1][i] + 1,
+        track[j - 1][i - 1] + indicator
+      );
+    }
+  }
+
+  const distance = track[str2.length][str1.length];
+  const maxLen = Math.max(str1.length, str2.length);
+  return 1 - distance / maxLen;
+};
+
+// Returns the best-matching official move or falls back to cleaned OCR
+const matchNearestMove = (rawOcrText) => {
+  if (!rawOcrText || rawOcrText.length < 3) return "";
+  
+  // Basic cleanup: remove numbers and special symbols
+  const cleaned = rawOcrText.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim();
+
+  let bestMatch = cleaned;
+  let highestScore = 0;
+
+  for (const move of KNOWN_MOVES) {
+    const score = getSimilarity(cleaned, move);
+    if (score > highestScore) {
+      highestScore = score;
+      bestMatch = move;
+    }
+  }
+
+  // If similarity is >= 55%, snap to the official move name
+  return highestScore >= 0.55 ? bestMatch : cleaned;
+};
   // 2. Dynamic Moveset Reader (Locates the tab header first)
   const extractMovesFromCanvas = async (worker, canvas) => {
     // Crop the entire lower 40% where attacks can reside (Mega/Primal shifts included)
@@ -188,9 +260,9 @@ export default function App() {
         );
       });
 
-    return {
-      fast: candidateLines[0] || '',
-      charged: candidateLines[1] || ''
+   return {
+      fast: candidateLines[0] ? matchNearestMove(candidateLines[0]) : '',
+      charged: candidateLines[1] ? matchNearestMove(candidateLines[1]) : ''
     };
   };
   // Helper to reliably check if a screenshot is an Appraisal screen
