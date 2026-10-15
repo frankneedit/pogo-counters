@@ -98,9 +98,9 @@ export default function App() {
     const W = canvas.width;
     const H = canvas.height;
 
-    // Fully calibrated inner track boundaries for 20:9 displays
-    const startX = Math.round(W * 0.115);
-    const endX = Math.round(W * 0.468);
+    // Exact inner track boundaries
+    const startX = Math.round(W * 0.118);
+    const endX = Math.round(W * 0.456);
     const totalBarWidth = endX - startX;
 
     const barYPercentages = [0.776, 0.822, 0.864];
@@ -108,6 +108,7 @@ export default function App() {
     const ivs = barYPercentages.map((yPct) => {
       const yCenter = Math.round(H * yPct);
       let filledPixels = 0;
+      let hasMaxRed = false;
       const offsets = [-3, -1, 0, 1, 3];
 
       for (let x = startX; x <= endX; x++) {
@@ -121,7 +122,11 @@ export default function App() {
           const isCoralRedByRGB = (r > 175 && r > g + 30 && r > b + 30 && l <= 85);
           const isCoralRedByHSL = ((h >= 335 || h <= 20) && s >= 25 && l >= 30 && l <= 82);
 
-          if (isOrange || isCoralRedByRGB || isCoralRedByHSL) {
+          if (isCoralRedByRGB || isCoralRedByHSL) {
+            hasMaxRed = true;
+            isFilled = true;
+            break;
+          } else if (isOrange) {
             isFilled = true;
             break;
           }
@@ -129,8 +134,12 @@ export default function App() {
         if (isFilled) filledPixels++;
       }
 
+      // If coral red is present, it is an automatic 15 IV
+      if (hasMaxRed && filledPixels >= totalBarWidth * 0.88) {
+        return 15;
+      }
+
       const ratio = Math.min(1, Math.max(0, filledPixels / totalBarWidth));
-      // Exactly 15 units divided across 3 tick segments
       return Math.min(15, Math.max(0, Math.round(ratio * 15)));
     });
 
