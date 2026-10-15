@@ -224,58 +224,63 @@ export default function App() {
     if (!fileList || fileList.length === 0) return;
     setIsProcessing(true);
 
-    const files = Array.from(fileList);
-    setStatusMsg(`Loading ${files.length} screenshot(s)...`);
-
-    // Reset old moves if scanning a fresh Pokémon from the header
-    let current = activeRecord ? { ...activeRecord } : {
-      id: 'poke_' + Date.now(),
-      name: '',
-      cp: 0,
-      atk: 0,
-      def: 0,
-      hp: 0,
-      ivPercentage: 0,
-      fastMove: '',
-      chargedMove: '',
-      tags: [],
-      screenshot: '',
-      createdAt: Date.now()
-    };
+    const rawFiles = Array.from(fileList);
+    setStatusMsg(`Loading ${rawFiles.length} screenshot(s)...`);
 
     try {
-      const worker = await createWorker('eng');
-
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        setStatusMsg(`Analyzing screenshot ${i + 1} of ${files.length}...`);
-
-        const img = new Image();
+      // 1. Convert all files into Canvas objects first
+      const loadedScreens = [];
+      for (let file of rawFiles) {
         const dataUrl = await new Promise((res) => {
           const reader = new FileReader();
           reader.onload = (e) => res(e.target.result);
           reader.readAsDataURL(file);
         });
+        const img = new Image();
         img.src = dataUrl;
         await new Promise((res) => (img.onload = res));
 
         const canvas = document.createElement('canvas');
         canvas.width = img.width;
         canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0);
+        canvas.getContext('2d').drawImage(img, 0, 0);
 
-        // Solid detection: does it have the 3-star badge?
         const isAppraisal = checkIfAppraisal(canvas);
+        loadedScreens.push({ canvas, dataUrl, isAppraisal });
+      }
+
+      // 2. Sort so Appraisal ALWAYS processes BEFORE Moveset
+      loadedScreens.sort((a, b) => (b.isAppraisal ? 1 : 0) - (a.isAppraisal ? 1 : 0));
+
+      const worker = await createWorker('eng');
+
+      // Base record initialized with whatever is currently open in the modal (if any)
+      let current = activeRecord ? { ...activeRecord } : {
+        id: 'poke_' + Date.now(),
+        name: '',
+        cp: 0,
+        atk: 0,
+        def: 0,
+        hp: 0,
+        ivPercentage: 0,
+        fastMove: '',
+        chargedMove: '',
+        tags: [],
+        screenshot: '',
+        createdAt: Date.now()
+      };
+
+      for (let i = 0; i < loadedScreens.length; i++) {
+        const { canvas, dataUrl, isAppraisal } = loadedScreens[i];
 
         if (isAppraisal) {
-          setStatusMsg('Detected Appraisal Screen: Reading IVs & CP...');
+          setStatusMsg(`Analyzing Appraisal Screen (${i + 1}/${loadedScreens.length})...`);
           const ivs = analyzeIVBars(canvas);
 
-          // 1. CP Crop (Top Arc)
-          const cpCanvas = document.createElement('canvas');
+          // CP Crop
           const cpW = Math.round(canvas.width * 0.45);
           const cpH = Math.round(canvas.height * 0.08);
+          const cpCanvas = document.createElement('canvas');
           cpCanvas.width = cpW;
           cpCanvas.height = cpH;
           cpCanvas.getContext('2d').drawImage(
@@ -287,10 +292,10 @@ export default function App() {
           const cpRes = await worker.recognize(cpCanvas);
           const cpMatch = cpRes.data.text.match(/\d{3,4}/);
 
-          // 2. Species Name Crop
-          const nameCanvas = document.createElement('canvas');
+          // Name Crop
           const nW = Math.round(canvas.width * 0.6);
           const nH = Math.round(canvas.height * 0.06);
+          const nameCanvas = document.createElement('canvas');
           nameCanvas.width = nW;
           nameCanvas.height = nH;
           nameCanvas.getContext('2d').drawImage(
@@ -302,7 +307,7 @@ export default function App() {
           const nameRes = await worker.recognize(nameCanvas);
           const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
 
-          // 3. Debug Thumbnail
+          // Debug visual crop of the appraisal bars
           const dW = Math.round(canvas.width * 0.40);
           const dH = Math.round(canvas.height * 0.14);
           const debugCanvas = document.createElement('canvas');
@@ -317,18 +322,15 @@ export default function App() {
           setDebugCropUrl(debugCanvas.toDataURL());
 
           const totalIv = ivs.atk + ivs.def + ivs.hp;
-          const ivPct = parseFloat(((totalIv / 45) * 100).toFixed(1));
-
           current.atk = ivs.atk;
           current.def = ivs.def;
           current.hp = ivs.hp;
-          current.ivPercentage = ivPct;
+          current.ivPercentage = parseFloat(((totalIv / 45) * 100).toFixed(1));
           if (cleanName.length >= 3) current.name = cleanName;
           if (cpMatch) current.cp = parseInt(cpMatch[0], 10);
           current.screenshot = dataUrl;
         } else {
-          // This is a Moveset Screen
-          setStatusMsg('Detected Moveset Screen: Extracting Attacks...');
+          setStatusMsg(`Analyzing Moveset Screen (${i + 1}/${loadedScreens.length})...`);
           const moves = await extractMovesFromCanvas(worker, canvas);
           if (moves.fast) current.fastMove = moves.fast;
           if (moves.charged) current.chargedMove = moves.charged;
@@ -348,13 +350,12 @@ export default function App() {
       setActiveRecord(current);
       setIsModalOpen(true);
     } catch (err) {
-      console.error(err);
+      console.error('Scan error:', err);
     } finally {
       setIsProcessing(false);
       setStatusMsg('');
     }
   };
-
   const handleSaveModal = async () => {
     if (!activeRecord) return;
     await saveRecord(activeRecord);
