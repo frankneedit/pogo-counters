@@ -4,6 +4,7 @@ import {
   RefreshCw, X, Layers, Image as ImageIcon, Download, UploadCloud, Plus
 } from 'lucide-react';
 import { createWorker } from 'tesseract.js';
+import { supabase } from './supabase';
 
 // Official Pokémon type pill colors in Tailwind
 const TYPE_STYLES = {
@@ -27,97 +28,91 @@ const TYPE_STYLES = {
   Dark: "bg-neutral-800 text-neutral-300 border-neutral-700"
 };
 
-const getPokemonTypes = (name) => {
-  if (!name) return [];
-  const match = Object.keys(POKEMON_TYPES).find(k => k.toLowerCase() === name.toLowerCase().trim());
-  return match ? POKEMON_TYPES[match] : [];
-};
-
-// In-memory / localStorage cache so we don't query the API twice for the same Pokémon
+// In-memory / localStorage cache so each Pokémon is queried once
 const typeCache = JSON.parse(localStorage.getItem('poke_type_cache') || '{}');
 
-export const fetchPokemonTypesOnline = async (speciesName) => {
+const fetchPokemonTypesOnline = async (speciesName) => {
   if (!speciesName) return [];
   const cleanName = speciesName.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-
-  // 1. Return from cache if already fetched
-  if (typeCache[cleanName]) {
-    return typeCache[cleanName];
-  }
+  if (typeCache[cleanName]) return typeCache[cleanName];
 
   try {
-    // 2. Query free PokéAPI directly
     const res = await fetch(`https://pokeapi.co/api/v2/pokemon/${cleanName}`);
     if (!res.ok) throw new Error('Not found');
-
     const data = await res.json();
-    // Capitalize type names: e.g. ["steel", "dragon"] -> ["Steel", "Dragon"]
     const types = data.types.map(
       (t) => t.type.name.charAt(0).toUpperCase() + t.type.name.slice(1)
     );
-
-    // 3. Save to cache
     typeCache[cleanName] = types;
     localStorage.setItem('poke_type_cache', JSON.stringify(typeCache));
-
     return types;
-  } catch (err) {
-    // Fallback if offline or species has special form suffix
+  } catch {
     return [];
   }
 };
-/**
-const DB_NAME = 'PokeGoVaultDB';
-const DB_VERSION = 1;
-const STORE_NAME = 'pokemon_records';
 
-const initDB = () => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = (e) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
+// Known moves dictionary for fuzzy matching
+const KNOWN_MOVES = [
+  "Mud Shot", "Metal Claw", "Dragon Tail", "Dragon Breath", "Counter", 
+  "Shadow Claw", "Vine Whip", "Razor Leaf", "Water Gun", "Waterfall",
+  "Fire Fang", "Fire Spin", "Incinerate", "Bullet Punch", "Snarl",
+  "Bite", "Lick", "Psycho Cut", "Confusion", "Lock-On", "Thunder Shock",
+  "Volt Switch", "Spark", "Poison Jab", "Hex", "Air Slash", "Wing Attack",
+  "Gust", "Ice Shard", "Powder Snow", "Smack Down", "Rock Throw", "Mud-Slap",
+  "Earthquake", "Draco Meteor", "Precipice Blades", "Roar of Time", "Iron Head",
+  "Hydro Cannon", "Surf", "Origin Pulse", "Blast Burn", "Overheat",
+  "Fire Blast", "Frenzy Plant", "Solar Beam", "Energy Ball", "Grass Knot",
+  "Wild Charge", "Thunderbolt", "Thunder", "Zap Cannon", "Close Combat",
+  "Dynamic Punch", "Aura Sphere", "Superpower", "Cross Chop", "Shadow Ball",
+  "Dark Pulse", "Foul Play", "Crunch", "Psychic", "Psyshock", "Moonblast",
+  "Play Rough", "Dazzling Gleam", "Ice Beam", "Blizzard", "Avalanche",
+  "Stone Edge", "Rock Slide", "Sludge Bomb", "Sludge Wave", "Gunk Shot",
+  "Brave Bird", "Sky Attack", "Hurricane", "Fly", "Aeroblast", "Sacred Fire"
+];
+
+const getSimilarity = (s1, s2) => {
+  const str1 = s1.toLowerCase().trim();
+  const str2 = s2.toLowerCase().trim();
+  if (str1.includes(str2) || str2.includes(str1)) return 0.85;
+
+  const track = Array(str2.length + 1).fill(null).map(() =>
+    Array(str1.length + 1).fill(null)
+  );
+  for (let i = 0; i <= str1.length; i += 1) track[0][i] = i;
+  for (let j = 0; j <= str2.length; j += 1) track[j][0] = j;
+
+  for (let j = 1; j <= str2.length; j += 1) {
+    for (let i = 1; i <= str1.length; i += 1) {
+      const indicator = str1[i - 1] === str2[j - 1] ? 0 : 1;
+      track[j][i] = Math.min(
+        track[j][i - 1] + 1,
+        track[j - 1][i] + 1,
+        track[j - 1][i - 1] + indicator
+      );
+    }
+  }
+  const distance = track[str2.length][str1.length];
+  return 1 - distance / Math.max(str1.length, str2.length);
 };
 
-const saveRecord = async (record) => {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction([STORE_NAME], 'readwrite');
-    tx.objectStore(STORE_NAME).put(record);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+const matchNearestMove = (rawOcrText) => {
+  if (!rawOcrText || rawOcrText.length < 3) return "";
+  const cleaned = rawOcrText.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim();
+
+  let bestMatch = cleaned;
+  let highestScore = 0;
+
+  for (const move of KNOWN_MOVES) {
+    const score = getSimilarity(cleaned, move);
+    if (score > highestScore) {
+      highestScore = score;
+      bestMatch = move;
+    }
+  }
+  return highestScore >= 0.55 ? bestMatch : cleaned;
 };
 
-const getAllRecords = async () => {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction([STORE_NAME], 'readonly');
-    const req = tx.objectStore(STORE_NAME).getAll();
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
-  });
-};
-
-const deleteRecord = async (id) => {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction([STORE_NAME], 'readwrite');
-    tx.objectStore(STORE_NAME).delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-};
-**/
-
-import { supabase } from './supabase';
-
+// Supabase CRUD Helpers
 const getAllRecords = async () => {
   const { data, error } = await supabase
     .from('pokemon_records')
@@ -129,12 +124,10 @@ const getAllRecords = async () => {
     return [];
   }
 
-  // Map PostgreSQL snake_case columns back to the camelCase used in your React UI
   return (data || []).map((row) => ({
     id: row.id,
     name: row.name,
     cp: row.cp,
-    types: row.types || getPokemonTypes(row.name) || [],
     atk: row.atk,
     def: row.def,
     hp: row.hp,
@@ -142,6 +135,7 @@ const getAllRecords = async () => {
     fastMove: row.fast_move || '',
     chargedMove: row.charged_move || '',
     tags: row.tags || [],
+    types: row.types || [],
     screenshot: row.screenshot_url || '',
     createdAt: Number(row.created_at)
   }));
@@ -152,7 +146,6 @@ const saveRecord = async (record) => {
     id: record.id,
     name: record.name,
     cp: record.cp,
-    types: record.types && record.types.length > 0 ? record.types : getPokemonTypes(record.name),
     atk: record.atk,
     def: record.def,
     hp: record.hp,
@@ -160,28 +153,19 @@ const saveRecord = async (record) => {
     fast_move: record.fastMove,
     charged_move: record.chargedMove,
     tags: record.tags || [],
+    types: record.types || [],
     created_at: record.createdAt || Date.now()
   };
 
-  const { error } = await supabase
-    .from('pokemon_records')
-    .upsert(payload);
-
-  if (error) {
-    console.error('Error saving record to Supabase:', error);
-  }
+  const { error } = await supabase.from('pokemon_records').upsert(payload);
+  if (error) console.error('Error saving record to Supabase:', error);
 };
 
 const deleteRecord = async (id) => {
-  const { error } = await supabase
-    .from('pokemon_records')
-    .delete()
-    .eq('id', id);
-
-  if (error) {
-    console.error('Error deleting record from Supabase:', error);
-  }
+  const { error } = await supabase.from('pokemon_records').delete().eq('id', id);
+  if (error) console.error('Error deleting record from Supabase:', error);
 };
+
 export default function App() {
   const [records, setRecords] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -199,7 +183,7 @@ export default function App() {
 
   const loadAll = async () => {
     const data = await getAllRecords();
-    setRecords(data.sort((a, b) => b.createdAt - a.createdAt));
+    setRecords(data);
   };
 
   const rgbToHsl = (r, g, b) => {
@@ -221,13 +205,29 @@ export default function App() {
     return [h * 360, s * 100, l * 100];
   };
 
-  // 1. Calibrated IV Bar Analyzer
+  const checkIfAppraisal = (canvas) => {
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
+    let badgeGoldPixels = 0;
+
+    for (let y = Math.round(H * 0.62); y <= Math.round(H * 0.74); y += 3) {
+      for (let x = Math.round(W * 0.05); x <= Math.round(W * 0.25); x += 3) {
+        const pixel = ctx.getImageData(x, y, 1, 1).data;
+        const [h, s, l] = rgbToHsl(pixel[0], pixel[1], pixel[2]);
+        if (h >= 24 && h <= 50 && s >= 45 && l >= 35 && l <= 85) {
+          badgeGoldPixels++;
+        }
+      }
+    }
+    return badgeGoldPixels > 35;
+  };
+
   const analyzeIVBars = (canvas) => {
     const ctx = canvas.getContext('2d');
     const W = canvas.width;
     const H = canvas.height;
 
-    // Exact inner track boundaries
     const startX = Math.round(W * 0.118);
     const endX = Math.round(W * 0.456);
     const totalBarWidth = endX - startX;
@@ -263,7 +263,6 @@ export default function App() {
         if (isFilled) filledPixels++;
       }
 
-      // If coral red is present, it is an automatic 15 IV
       if (hasMaxRed && filledPixels >= totalBarWidth * 0.88) {
         return 15;
       }
@@ -278,82 +277,8 @@ export default function App() {
       hp: ivs[2] ?? 0
     };
   };
-// Comprehensive list of Pokémon GO moves
-const KNOWN_MOVES = [
-  // Common Fast Moves
-  "Mud Shot", "Metal Claw", "Dragon Tail", "Dragon Breath", "Counter", 
-  "Shadow Claw", "Vine Whip", "Razor Leaf", "Water Gun", "Waterfall",
-  "Fire Fang", "Fire Spin", "Incinerate", "Bullet Punch", "Snarl",
-  "Bite", "Lick", "Psycho Cut", "Confusion", "Lock-On", "Thunder Shock",
-  "Volt Switch", "Spark", "Poison Jab", "Hex", "Air Slash", "Wing Attack",
-  "Gust", "Ice Shard", "Powder Snow", "Smack Down", "Rock Throw", "Mud-Slap",
 
-  // Common Charged Moves
-  "Earthquake", "Draco Meteor", "Precipice Blades", "Roar of Time", "Iron Head",
-  "Hydro Cannon", "Surf", "Origin Pulse", "Blast Burn", "Overheat",
-  "Fire Blast", "Frenzy Plant", "Solar Beam", "Energy Ball", "Grass Knot",
-  "Wild Charge", "Thunderbolt", "Thunder", "Zap Cannon", "Close Combat",
-  "Dynamic Punch", "Aura Sphere", "Superpower", "Cross Chop", "Shadow Ball",
-  "Dark Pulse", "Foul Play", "Crunch", "Psychic", "Psyshock", "Moonblast",
-  "Play Rough", "Dazzling Gleam", "Ice Beam", "Blizzard", "Avalanche",
-  "Stone Edge", "Rock Slide", "Sludge Bomb", "Sludge Wave", "Gunk Shot",
-  "Brave Bird", "Sky Attack", "Hurricane", "Fly", "Aeroblast", "Sacred Fire"
-];
-
-// Levenshtein Distance for typo & OCR noise tolerance
-const getSimilarity = (s1, s2) => {
-  const str1 = s1.toLowerCase().trim();
-  const str2 = s2.toLowerCase().trim();
-
-  // If one contains the other directly, give high priority
-  if (str1.includes(str2) || str2.includes(str1)) return 0.85;
-
-  const track = Array(str2.length + 1).fill(null).map(() =>
-    Array(str1.length + 1).fill(null)
-  );
-  for (let i = 0; i <= str1.length; i += 1) track[0][i] = i;
-  for (let j = 0; j <= str2.length; j += 1) track[j][0] = j;
-
-  for (let j = 1; j <= str2.length; j += 1) {
-    for (let i = 1; i <= str1.length; i += 1) {
-      const indicator = str1[i - 1] === str2[j - 1] ? 0 : 1;
-      track[j][i] = Math.min(
-        track[j][i - 1] + 1,
-        track[j - 1][i] + 1,
-        track[j - 1][i - 1] + indicator
-      );
-    }
-  }
-
-  const distance = track[str2.length][str1.length];
-  const maxLen = Math.max(str1.length, str2.length);
-  return 1 - distance / maxLen;
-};
-
-// Returns the best-matching official move or falls back to cleaned OCR
-const matchNearestMove = (rawOcrText) => {
-  if (!rawOcrText || rawOcrText.length < 3) return "";
-  
-  // Basic cleanup: remove numbers and special symbols
-  const cleaned = rawOcrText.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim();
-
-  let bestMatch = cleaned;
-  let highestScore = 0;
-
-  for (const move of KNOWN_MOVES) {
-    const score = getSimilarity(cleaned, move);
-    if (score > highestScore) {
-      highestScore = score;
-      bestMatch = move;
-    }
-  }
-
-  // If similarity is >= 55%, snap to the official move name
-  return highestScore >= 0.55 ? bestMatch : cleaned;
-};
-  // 2. Dynamic Moveset Reader (Locates the tab header first)
   const extractMovesFromCanvas = async (worker, canvas) => {
-    // Crop the entire lower 40% where attacks can reside (Mega/Primal shifts included)
     const mW = Math.round(canvas.width * 0.88);
     const mH = Math.round(canvas.height * 0.35);
     const moveCanvas = document.createElement('canvas');
@@ -369,18 +294,12 @@ const matchNearestMove = (rawOcrText) => {
     const moveRes = await worker.recognize(moveCanvas);
     const rawLines = moveRes.data.lines.map(l => l.text.trim());
 
-    // Find the line index where "GYMS" or "RAIDS" appears
     let tabIndex = rawLines.findIndex(t => {
       const up = t.toUpperCase();
       return up.includes('GYM') || up.includes('RAID') || up.includes('TRAINER');
     });
 
-    // If tab header is found, scan lines starting immediately below it
     const candidateLines = (tabIndex !== -1 ? rawLines.slice(tabIndex + 1) : rawLines)
-      .map(t => {
-        // Remove trailing move power numbers, type icons, or single stray letters (like "140", "H", "I")
-        return t.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim();
-      })
       .filter(t => {
         const up = t.toUpperCase();
         return (
@@ -398,36 +317,10 @@ const matchNearestMove = (rawOcrText) => {
         );
       });
 
-   return {
+    return {
       fast: candidateLines[0] ? matchNearestMove(candidateLines[0]) : '',
       charged: candidateLines[1] ? matchNearestMove(candidateLines[1]) : ''
     };
-  };
-  // Helper to reliably check if a screenshot is an Appraisal screen
-  const checkIfAppraisal = (canvas) => {
-    const ctx = canvas.getContext('2d');
-    const W = canvas.width;
-    const H = canvas.height;
-
-    // Check the circular badge area (Y: 62% - 74%, X: 3% - 28%)
-    // The 3-star badge has distinct orange/gold badge colors (Hue ~28-48, Sat > 50%)
-    let badgeGoldPixels = 0;
-    const badgeX = Math.round(W * 0.12);
-    const badgeYStart = Math.round(H * 0.62);
-    const badgeYEnd = Math.round(H * 0.74);
-
-    for (let y = badgeYStart; y <= badgeYEnd; y += 3) {
-      for (let x = Math.round(W * 0.05); x <= Math.round(W * 0.25); x += 3) {
-        const pixel = ctx.getImageData(x, y, 1, 1).data;
-        const [h, s, l] = rgbToHsl(pixel[0], pixel[1], pixel[2]);
-        if (h >= 24 && h <= 50 && s >= 45 && l >= 35 && l <= 85) {
-          badgeGoldPixels++;
-        }
-      }
-    }
-
-    // A real appraisal screen will have hundreds of gold badge pixels
-    return badgeGoldPixels > 35;
   };
 
   const handleFilesSelected = async (fileList) => {
@@ -438,7 +331,6 @@ const matchNearestMove = (rawOcrText) => {
     setStatusMsg(`Loading ${rawFiles.length} screenshot(s)...`);
 
     try {
-      // 1. Convert all files into Canvas objects first
       const loadedScreens = [];
       for (let file of rawFiles) {
         const dataUrl = await new Promise((res) => {
@@ -453,18 +345,16 @@ const matchNearestMove = (rawOcrText) => {
         const canvas = document.createElement('canvas');
         canvas.width = img.width;
         canvas.height = img.height;
-        canvas.getContext('2d').drawImage(img, 0, 0);
+        ctxDraw(canvas, img);
 
         const isAppraisal = checkIfAppraisal(canvas);
         loadedScreens.push({ canvas, dataUrl, isAppraisal });
       }
 
-      // 2. Sort so Appraisal ALWAYS processes BEFORE Moveset
       loadedScreens.sort((a, b) => (b.isAppraisal ? 1 : 0) - (a.isAppraisal ? 1 : 0));
 
       const worker = await createWorker('eng');
 
-      // Base record initialized with whatever is currently open in the modal (if any)
       let current = activeRecord ? { ...activeRecord } : {
         id: 'poke_' + Date.now(),
         name: '',
@@ -476,6 +366,7 @@ const matchNearestMove = (rawOcrText) => {
         fastMove: '',
         chargedMove: '',
         tags: [],
+        types: [],
         screenshot: '',
         createdAt: Date.now()
       };
@@ -516,12 +407,8 @@ const matchNearestMove = (rawOcrText) => {
           );
           const nameRes = await worker.recognize(nameCanvas);
           const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
-          if (cleanName.length >= 3) {
-            current.name = cleanName;
-            setStatusMsg(`Fetching official types for ${cleanName}...`);
-            current.types = await fetchPokemonTypesOnline(cleanName);
-          }
-          // Debug visual crop of the appraisal bars
+
+          // Debug visual crop
           const dW = Math.round(canvas.width * 0.40);
           const dH = Math.round(canvas.height * 0.14);
           const debugCanvas = document.createElement('canvas');
@@ -540,7 +427,12 @@ const matchNearestMove = (rawOcrText) => {
           current.def = ivs.def;
           current.hp = ivs.hp;
           current.ivPercentage = parseFloat(((totalIv / 45) * 100).toFixed(1));
-          if (cleanName.length >= 3) current.name = cleanName;
+          
+          if (cleanName.length >= 3) {
+            current.name = cleanName;
+            setStatusMsg(`Fetching types for ${cleanName}...`);
+            current.types = await fetchPokemonTypesOnline(cleanName);
+          }
           if (cpMatch) current.cp = parseInt(cpMatch[0], 10);
           current.screenshot = dataUrl;
         } else {
@@ -570,6 +462,11 @@ const matchNearestMove = (rawOcrText) => {
       setStatusMsg('');
     }
   };
+
+  const ctxDraw = (c, img) => {
+    c.getContext('2d').drawImage(img, 0, 0);
+  };
+
   const handleSaveModal = async () => {
     if (!activeRecord) return;
     await saveRecord(activeRecord);
@@ -597,27 +494,26 @@ const matchNearestMove = (rawOcrText) => {
   };
 
   const importJSON = async (file) => {
-  const reader = new FileReader();
-  reader.onload = async (e) => {
-    try {
-      const list = JSON.parse(e.target.result);
-      if (Array.isArray(list)) {
-        for (let item of list) {
-          const types = (item.types && item.types.length > 0)
-            ? item.types
-            : await fetchPokemonTypesOnline(item.name);
-
-          await saveRecord({ ...item, types });
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const list = JSON.parse(e.target.result);
+        if (Array.isArray(list)) {
+          for (let item of list) {
+            const types = (item.types && item.types.length > 0)
+              ? item.types
+              : await fetchPokemonTypesOnline(item.name);
+            await saveRecord({ ...item, types });
+          }
+          await loadAll();
+          alert('Import completed successfully!');
         }
-        await loadAll();
-        alert('Import completed with official types populated!');
+      } catch {
+        alert('Invalid JSON file format.');
       }
-    } catch (err) {
-      alert('Invalid JSON file format.');
-    }
+    };
+    reader.readAsText(file);
   };
-  reader.readAsText(file);
-};
 
   const filteredRecords = records.filter(r => {
     const matchesSearch = r.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -646,34 +542,34 @@ const matchNearestMove = (rawOcrText) => {
             <button 
               onClick={exportJSON}
               title="Export JSON Backup"
-              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs flex items-center gap-1.5"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/60 shadow-sm transition-all active:scale-95"
             >
-              <Download className="w-4 h-4" />
+              <Download className="w-3.5 h-3.5 text-cyan-400" />
               <span className="hidden sm:inline">Export</span>
             </button>
             <label 
               title="Import JSON Backup"
-              className="cursor-pointer p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs flex items-center gap-1.5"
+              className="cursor-pointer flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/60 shadow-sm transition-all active:scale-95"
             >
-              <UploadCloud className="w-4 h-4" />
+              <UploadCloud className="w-3.5 h-3.5 text-amber-400" />
               <span className="hidden sm:inline">Import</span>
               <input type="file" accept=".json" className="hidden" onChange={(e) => e.target.files?.[0] && importJSON(e.target.files[0])} />
             </label>
             <label className="cursor-pointer flex items-center gap-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 px-4 py-2 rounded-xl text-sm font-semibold shadow-md active:scale-95 transition-all">
               <Upload className="w-4 h-4" />
               <span>Scan Screenshot(s)</span>
-             <input 
-  type="file" 
-  accept="image/*" 
-  multiple 
-  className="hidden" 
-  onChange={(e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      handleFilesSelected(e.target.files);
-      e.target.value = ''; // Resets input so you can re-upload the same file if needed
-    }
-  }}
-/>
+              <input 
+                type="file" 
+                accept="image/*" 
+                multiple
+                className="hidden" 
+                onChange={(e) => {
+                  if (e.target.files && e.target.files.length > 0) {
+                    handleFilesSelected(e.target.files);
+                    e.target.value = '';
+                  }
+                }}
+              />
             </label>
           </div>
         </div>
@@ -728,7 +624,6 @@ const matchNearestMove = (rawOcrText) => {
                       {item.name} - CP {item.cp}
                     </h3>
 
-                    {/* Official Dynamic Type Badges */}
                     {item.types && item.types.length > 0 && (
                       <div className="flex items-center gap-1.5 mt-1">
                         {item.types.map((t) => (
@@ -814,7 +709,7 @@ const matchNearestMove = (rawOcrText) => {
                 )}
               </div>
             </div>
-          ))}}
+          ))}
 
           {filteredRecords.length === 0 && !isProcessing && (
             <div className="col-span-full py-16 text-center text-slate-500">
@@ -849,7 +744,11 @@ const matchNearestMove = (rawOcrText) => {
                   <input
                     type="text"
                     value={activeRecord.name}
-                    onChange={(e) => setActiveRecord({ ...activeRecord, name: e.target.value })}
+                    onChange={async (e) => {
+                      const newName = e.target.value;
+                      const types = await fetchPokemonTypesOnline(newName);
+                      setActiveRecord({ ...activeRecord, name: newName, types });
+                    }}
                     className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
                   />
                 </div>
@@ -903,7 +802,12 @@ const matchNearestMove = (rawOcrText) => {
                       type="file"
                       accept="image/*"
                       className="hidden"
-                      onChange={(e) => e.target.files?.[0] && handleFilesSelected([e.target.files[0]])}
+                      onChange={(e) => {
+                        if (e.target.files?.[0]) {
+                          handleFilesSelected([e.target.files[0]]);
+                          e.target.value = '';
+                        }
+                      }}
                     />
                   </label>
                 </div>
@@ -914,7 +818,7 @@ const matchNearestMove = (rawOcrText) => {
                     <input
                       type="text"
                       value={activeRecord.fastMove}
-                      placeholder="e.g. Metal Claw"
+                      placeholder="e.g. Mud Shot"
                       onChange={(e) => setActiveRecord({ ...activeRecord, fastMove: e.target.value })}
                       className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
                     />
@@ -924,7 +828,7 @@ const matchNearestMove = (rawOcrText) => {
                     <input
                       type="text"
                       value={activeRecord.chargedMove}
-                      placeholder="e.g. Draco Meteor"
+                      placeholder="e.g. Earthquake"
                       onChange={(e) => setActiveRecord({ ...activeRecord, chargedMove: e.target.value })}
                       className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100"
                     />
