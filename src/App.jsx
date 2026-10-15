@@ -716,7 +716,7 @@ const matchNearestMove = (rawOcrText) => {
         )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredRecords.map((item) => (
+          {{filteredRecords.map((item) => (
             <div 
               key={item.id}
               className="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-4 shadow-xl hover:border-slate-700 transition-all flex flex-col justify-between"
@@ -727,7 +727,24 @@ const matchNearestMove = (rawOcrText) => {
                     <h3 className="font-extrabold text-lg text-slate-100 tracking-wide">
                       {item.name} - CP {item.cp}
                     </h3>
-                    <div className="flex items-center gap-2 mt-1">
+
+                    {/* Official Dynamic Type Badges */}
+                    {item.types && item.types.length > 0 && (
+                      <div className="flex items-center gap-1.5 mt-1">
+                        {item.types.map((t) => (
+                          <span
+                            key={t}
+                            className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md border ${
+                              TYPE_STYLES[t] || "bg-slate-800 text-slate-300 border-slate-700"
+                            }`}
+                          >
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-2 mt-1.5">
                       <span className="text-xs px-2 py-0.5 rounded font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
                         {item.ivPercentage}% IV
                       </span>
@@ -738,7 +755,7 @@ const matchNearestMove = (rawOcrText) => {
                   </div>
                   <button 
                     onClick={(e) => handleDelete(item.id, e)}
-                    className="text-slate-500 hover:text-rose-400 p-1"
+                    className="text-slate-500 hover:text-rose-400 p-1 transition-colors"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -781,7 +798,7 @@ const matchNearestMove = (rawOcrText) => {
 
               <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
                 <div className="flex flex-wrap gap-1">
-                  {item.tags.map(t => (
+                  {item.tags && item.tags.map(t => (
                     <span key={t} className="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-slate-300">
                       {t}
                     </span>
@@ -797,7 +814,7 @@ const matchNearestMove = (rawOcrText) => {
                 )}
               </div>
             </div>
-          ))}
+          ))}}
 
           {filteredRecords.length === 0 && !isProcessing && (
             <div className="col-span-full py-16 text-center text-slate-500">
