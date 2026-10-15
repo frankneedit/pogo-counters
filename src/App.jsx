@@ -444,14 +444,15 @@ export default function App() {
             <label className="cursor-pointer flex items-center gap-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 px-4 py-2 rounded-xl text-sm font-semibold shadow-md active:scale-95 transition-all">
               <Upload className="w-4 h-4" />
               <span>Scan Screenshot(s)</span>
-             <input
-  type="file"
-  accept="image/*"
-  className="hidden"
+             <input 
+  type="file" 
+  accept="image/*" 
+  multiple 
+  className="hidden" 
   onChange={(e) => {
-    if (e.target.files?.[0]) {
-      handleFilesSelected([e.target.files[0]]);
-      e.target.value = ''; // Reset so you can re-upload if needed
+    if (e.target.files && e.target.files.length > 0) {
+      handleFilesSelected(e.target.files);
+      e.target.value = ''; // Resets input so you can re-upload the same file if needed
     }
   }}
 />
