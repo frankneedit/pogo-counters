@@ -1,662 +1,590 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect } from 'react';
+import { 
+  Upload, Search, Shield, Zap, Sparkles, Trash2, 
+  RefreshCw, X, Layers, Image as ImageIcon, Download, UploadCloud
+} from 'lucide-react';
+import { createWorker } from 'tesseract.js';
 
-const RAID_BOSS_COUNTERS = {
-  "Rayquaza": {
-    types: ["Dragon", "Flying"],
-    weaknesses: ["Ice (2.56x)", "Dragon", "Fairy", "Rock"],
-    counters: [
-      { name: "Mamoswine", fast: "Powder Snow", charged: "Avalanche", tier: "Top Non-Mega" },
-      { name: "Baxcalibur", fast: "Ice Fang", charged: "Avalanche", tier: "Top Non-Mega" },
-      { name: "Glaceon", fast: "Frost Breath", charged: "Avalanche", tier: "Budget" },
-      { name: "Mega Rayquaza", fast: "Dragon Tail", charged: "Outrage", tier: "Mega" },
-      { name: "Mega Gardevoir", fast: "Charm", charged: "Dazzling Gleam", tier: "Mega" },
-      { name: "Shadow Mamoswine", fast: "Powder Snow", charged: "Avalanche", tier: "Shadow" }
-    ]
-  },
-  "Kyogre": {
-    types: ["Water"],
-    weaknesses: ["Grass", "Electric"],
-    counters: [
-      { name: "Kartana", fast: "Razor Leaf", charged: "Leaf Blade", tier: "Top Non-Mega" },
-      { name: "Xurkitree", fast: "Thunder Shock", charged: "Discharge", tier: "Top Non-Mega" },
-      { name: "Zekrom", fast: "Charge Beam", charged: "Fusion Bolt", tier: "Top Non-Mega" },
-      { name: "Mega Sceptile", fast: "Bullet Seed", charged: "Frenzy Plant", tier: "Mega" },
-      { name: "Mega Manectric", fast: "Thunder Fang", charged: "Wild Charge", tier: "Mega" },
-      { name: "Roserade", fast: "Bullet Seed", charged: "Grass Knot", tier: "Budget" }
-    ]
-  },
-  "Groudon": {
-    types: ["Ground"],
-    weaknesses: ["Water", "Grass", "Ice"],
-    counters: [
-      { name: "Primal Kyogre", fast: "Waterfall", charged: "Origin Pulse", tier: "Mega" },
-      { name: "Kartana", fast: "Razor Leaf", charged: "Leaf Blade", tier: "Top Non-Mega" },
-      { name: "Mega Swampert", fast: "Water Gun", charged: "Hydro Cannon", tier: "Mega" },
-      { name: "Mamoswine", fast: "Powder Snow", charged: "Avalanche", tier: "Top Non-Mega" },
-      { name: "Shadow Feraligatr", fast: "Waterfall", charged: "Hydro Cannon", tier: "Shadow" }
-    ]
-  },
-  "Mewtwo": {
-    types: ["Psychic"],
-    weaknesses: ["Dark", "Ghost", "Bug"],
-    counters: [
-      { name: "Mega Tyranitar", fast: "Bite", charged: "Brutal Swing", tier: "Mega" },
-      { name: "Mega Gengar", fast: "Shadow Claw", charged: "Shadow Ball", tier: "Mega" },
-      { name: "Hydreigon", fast: "Bite", charged: "Brutal Swing", tier: "Top Non-Mega" },
-      { name: "Giratina (Origin)", fast: "Shadow Claw", charged: "Shadow Force", tier: "Top Non-Mega" },
-      { name: "Chandelure", fast: "Hex", charged: "Shadow Ball", tier: "Budget" }
-    ]
-  },
-  "Necrozma (Dusk Mane)": {
-    types: ["Psychic", "Steel"],
-    weaknesses: ["Dark", "Ghost", "Fire", "Ground"],
-    counters: [
-      { name: "Mega Tyranitar", fast: "Bite", charged: "Brutal Swing", tier: "Mega" },
-      { name: "Mega Gengar", fast: "Shadow Claw", charged: "Shadow Ball", tier: "Mega" },
-      { name: "Reshiram", fast: "Fire Fang", charged: "Fusion Flare", tier: "Top Non-Mega" },
-      { name: "Hydreigon", fast: "Bite", charged: "Brutal Swing", tier: "Top Non-Mega" },
-      { name: "Primal Groudon", fast: "Mud Shot", charged: "Precipice Blades", tier: "Mega" }
-    ]
-  },
-  "Necrozma (Dawn Wings)": {
-    types: ["Psychic", "Ghost"],
-    weaknesses: ["Ghost (2.56x)", "Dark (2.56x)"],
-    counters: [
-      { name: "Mega Tyranitar", fast: "Bite", charged: "Brutal Swing", tier: "Mega" },
-      { name: "Mega Gengar", fast: "Shadow Claw", charged: "Shadow Ball", tier: "Mega" },
-      { name: "Hydreigon", fast: "Bite", charged: "Brutal Swing", tier: "Top Non-Mega" },
-      { name: "Tyranitar", fast: "Bite", charged: "Brutal Swing", tier: "Top Non-Mega" },
-      { name: "Chandelure", fast: "Hex", charged: "Shadow Ball", tier: "Budget" }
-    ]
-  },
-  "Dialga": {
-    types: ["Steel", "Dragon"],
-    weaknesses: ["Fighting", "Ground"],
-    counters: [
-      { name: "Terrakion", fast: "Double Kick", charged: "Sacred Sword", tier: "Top Non-Mega" },
-      { name: "Primal Groudon", fast: "Mud Shot", charged: "Precipice Blades", tier: "Mega" },
-      { name: "Mega Lucario", fast: "Force Palm", charged: "Aura Sphere", tier: "Mega" },
-      { name: "Conkeldurr", fast: "Counter", charged: "Dynamic Punch", tier: "Top Non-Mega" },
-      { name: "Machamp", fast: "Counter", charged: "Dynamic Punch", tier: "Budget" }
-    ]
-  },
-  "Palkia": {
-    types: ["Water", "Dragon"],
-    weaknesses: ["Dragon", "Fairy"],
-    counters: [
-      { name: "Mega Rayquaza", fast: "Dragon Tail", charged: "Breaking Swipe", tier: "Mega" },
-      { name: "Mega Gardevoir", fast: "Charm", charged: "Dazzling Gleam", tier: "Mega" },
-      { name: "Dialga", fast: "Dragon Breath", charged: "Draco Meteor", tier: "Top Non-Mega" },
-      { name: "Dragonite", fast: "Dragon Tail", charged: "Outrage", tier: "Budget" },
-      { name: "Togekiss", fast: "Charm", charged: "Dazzling Gleam", tier: "Budget" }
-    ]
-  }
+const DB_NAME = 'PokeGoVaultDB';
+const DB_VERSION = 1;
+const STORE_NAME = 'pokemon_records';
+
+const initDB = () => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
 };
 
-// Canvas helper to downscale and boost contrast so OCR succeeds on mobile
-function preprocessImage(file) {
+const saveRecord = async (record) => {
+  const db = await initDB();
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-
-        // Resize down to max width 1000px so mobile wasm doesn't crash
-        const maxDim = 1000;
-        let width = img.width;
-        let height = img.height;
-        if (width > maxDim || height > maxDim) {
-          if (width > height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
-          }
-        }
-
-        canvas.width = width;
-        canvas.height = height;
-        ctx.drawImage(img, 0, 0, width, height);
-
-        // Convert to grayscale & contrast enhance
-        const imgData = ctx.getImageData(0, 0, width, height);
-        const d = imgData.data;
-        for (let i = 0; i < d.length; i += 4) {
-          const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-          // Simple contrast stretch
-          const contrast = gray > 140 ? 255 : gray < 70 ? 0 : gray;
-          d[i] = contrast;
-          d[i + 1] = contrast;
-          d[i + 2] = contrast;
-        }
-        ctx.putImageData(imgData, 0, 0);
-
-        canvas.toBlob((blob) => {
-          if (blob) resolve(blob);
-          else reject(new Error("Canvas conversion failed"));
-        }, "image/jpeg", 0.9);
-      };
-      img.onerror = reject;
-      img.src = e.target.result;
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+    const tx = db.transaction([STORE_NAME], 'readwrite');
+    tx.objectStore(STORE_NAME).put(record);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
   });
-}
+};
+
+const getAllRecords = async () => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([STORE_NAME], 'readonly');
+    const req = tx.objectStore(STORE_NAME).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+};
+
+const deleteRecord = async (id) => {
+  const db = await initDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([STORE_NAME], 'readwrite');
+    tx.objectStore(STORE_NAME).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+};
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState("search");
-  const [inventory, setInventory] = useState(() => {
-    const saved = localStorage.getItem("pogo_inventory");
-    return saved ? JSON.parse(saved) : [
-      { id: 1, name: "Mamoswine", cp: 3120, ivAtk: 15, ivDef: 14, ivHp: 15, fastMove: "Powder Snow", chargedMove: "Avalanche", form: "Shadow" },
-      { id: 2, name: "Kartana", cp: 2980, ivAtk: 14, ivDef: 15, ivHp: 13, fastMove: "Razor Leaf", chargedMove: "Leaf Blade", form: "Regular" }
-    ];
-  });
-
-  const [bossQuery, setBossQuery] = useState("");
-  const [selectedBoss, setSelectedBoss] = useState("Rayquaza");
-
-  const [formData, setFormData] = useState({
-    name: "",
-    cp: "",
-    form: "Regular",
-    ivAtk: 15,
-    ivDef: 15,
-    ivHp: 15,
-    fastMove: "",
-    chargedMove: ""
-  });
-
-  const [ocrStatus, setOcrStatus] = useState("");
-  const [isScanning, setIsScanning] = useState(false);
-  const [uploadedPreview, setUploadedPreview] = useState(null);
-  const [rawOcrText, setRawOcrText] = useState("");
+  const [records, setRecords] = useState([]);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterTag, setFilterTag] = useState('ALL');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [statusMsg, setStatusMsg] = useState('');
+  const [activeRecord, setActiveRecord] = useState(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [inspectedImage, setInspectedImage] = useState(null);
+  const [debugCropUrl, setDebugCropUrl] = useState(null);
 
   useEffect(() => {
-    localStorage.setItem("pogo_inventory", JSON.stringify(inventory));
-  }, [inventory]);
+    loadAll();
+  }, []);
 
-  const bossList = Object.keys(RAID_BOSS_COUNTERS);
-  const filteredBosses = useMemo(() => {
-    if (!bossQuery.trim()) return bossList;
-    return bossList.filter((b) => b.toLowerCase().includes(bossQuery.toLowerCase()));
-  }, [bossQuery, bossList]);
+  const loadAll = async () => {
+    const data = await getAllRecords();
+    setRecords(data.sort((a, b) => b.createdAt - a.createdAt));
+  };
 
-  const handleImageUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setUploadedPreview(URL.createObjectURL(file));
-    setIsScanning(true);
-    setRawOcrText("");
-    setOcrStatus("Compressing and enhancing image for OCR...");
-
-    try {
-      if (!window.Tesseract) {
-        throw new Error("OCR library not ready. Check internet connection.");
+  const rgbToHsl = (r, g, b) => {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h, s, l = (max + min) / 2;
+    if (max === min) {
+      h = s = 0;
+    } else {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      switch (max) {
+        case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+        case g: h = (b - r) / d + 2; break;
+        case b: h = (r - g) / d + 4; break;
       }
+      h /= 6;
+    }
+    return [h * 360, s * 100, l * 100];
+  };
 
-      // 1. Optimize image through Canvas first
-      const processedBlob = await preprocessImage(file);
+  const analyzeIVBars = (canvas) => {
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
 
-      // 2. Run Tesseract recognition
-      setOcrStatus("Reading text...");
-      const worker = await window.Tesseract.createWorker({
-        logger: (m) => {
-          if (m.status === "recognizing text") {
-            setOcrStatus(`Scanning screenshot: ${Math.round(m.progress * 100)}%`);
-          }
-        }
-      });
+    const startX = Math.round(W * 0.118);
+    const endX = Math.round(W * 0.462);
+    const totalBarWidth = endX - startX;
 
-      await worker.loadLanguage("eng");
-      await worker.initialize("eng");
-      const { data } = await worker.recognize(processedBlob);
-      await worker.terminate();
+    const barYPercentages = [0.784, 0.823, 0.862];
 
-      const raw = data.text || "";
-      setRawOcrText(raw);
+    const ivs = barYPercentages.map((yPct) => {
+      const yCenter = Math.round(H * yPct);
+      let filledPixels = 0;
+      const offsets = [-3, -1, 0, 1, 3];
 
-      // Extract CP
-      const cpRegex = /(?:CP|GP|CF|co|op)\s*([0-9]{2,4})/i;
-      const cpMatch = raw.match(cpRegex);
-      const detectedCp = cpMatch ? cpMatch[1] : "";
+      for (let x = startX; x <= endX; x++) {
+        let isFilled = false;
+        for (let dy of offsets) {
+          const pixel = ctx.getImageData(x, yCenter + dy, 1, 1).data;
+          const [h, s, l] = rgbToHsl(pixel[0], pixel[1], pixel[2]);
 
-      // Extract Form
-      let detectedForm = "Regular";
-      if (/shadow/i.test(raw) || /frustration/i.test(raw)) detectedForm = "Shadow";
-      if (/purified/i.test(raw) || /return/i.test(raw)) detectedForm = "Purified";
+          const isOrange = (h >= 18 && h <= 50 && s >= 35 && l >= 28 && l <= 78);
+          const isMaxRed = ((h >= 340 || h <= 15) && s >= 40 && l >= 32 && l <= 75);
 
-      // Match Species against known boss/counter dictionary
-      let detectedName = "";
-      for (const b of bossList) {
-        if (new RegExp(b, "i").test(raw)) {
-          detectedName = b;
-          break;
-        }
-        for (const c of RAID_BOSS_COUNTERS[b].counters) {
-          if (new RegExp(c.name.replace(/^(Mega|Shadow)\s*/i, ""), "i").test(raw)) {
-            detectedName = c.name.replace(/^(Mega|Shadow)\s*/i, "");
+          if (isOrange || isMaxRed) {
+            isFilled = true;
             break;
           }
         }
-        if (detectedName) break;
+        if (isFilled) filledPixels++;
       }
 
-      setFormData((prev) => ({
-        ...prev,
-        name: detectedName || prev.name,
-        cp: detectedCp || prev.cp,
-        form: detectedForm
-      }));
+      const ratio = Math.min(1, Math.max(0, filledPixels / totalBarWidth));
+      return Math.round(ratio * 15);
+    });
 
-      setOcrStatus(
-        detectedCp || detectedName
-          ? `✓ Found ${detectedName ? detectedName : "Pokémon"} (CP ${detectedCp || "?"})!`
-          : "Done scanning. Please verify extracted fields below."
+    return {
+      atk: Math.min(15, Math.max(0, ivs[0] ?? 10)),
+      def: Math.min(15, Math.max(0, ivs[1] ?? 10)),
+      hp: Math.min(15, Math.max(0, ivs[2] ?? 10))
+    };
+  };
+
+  const processScreenshot = async (file) => {
+    setIsProcessing(true);
+    setStatusMsg('Reading image file...');
+
+    const img = new Image();
+    const dataUrl = await new Promise((res) => {
+      const reader = new FileReader();
+      reader.onload = (e) => res(e.target.result);
+      reader.readAsDataURL(file);
+    });
+    img.src = dataUrl;
+    await new Promise((res) => (img.onload = res));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+
+    setStatusMsg('Measuring appraisal bars...');
+    const ivs = analyzeIVBars(canvas);
+
+    const dW = Math.round(canvas.width * 0.40);
+    const dH = Math.round(canvas.height * 0.14);
+    const debugCanvas = document.createElement('canvas');
+    debugCanvas.width = dW;
+    debugCanvas.height = dH;
+    debugCanvas.getContext('2d').drawImage(
+      canvas,
+      Math.round(canvas.width * 0.10),
+      Math.round(canvas.height * 0.75),
+      dW, dH, 0, 0, dW, dH
+    );
+    setDebugCropUrl(debugCanvas.toDataURL());
+
+    setStatusMsg('OCR reading CP & Species...');
+    let extractedCP = 1500;
+    let extractedName = 'Dialga';
+    let fastMove = 'Metal Claw';
+    let chargedMove = 'Draco Meteor';
+
+    try {
+      const worker = await createWorker('eng');
+
+      const cpW = Math.round(canvas.width * 0.45);
+      const cpH = Math.round(canvas.height * 0.08);
+      const cpCanvas = document.createElement('canvas');
+      cpCanvas.width = cpW;
+      cpCanvas.height = cpH;
+      cpCanvas.getContext('2d').drawImage(
+        canvas, 
+        Math.round(canvas.width * 0.28), 
+        Math.round(canvas.height * 0.045), 
+        cpW, cpH, 0, 0, cpW, cpH
       );
+      const cpRes = await worker.recognize(cpCanvas);
+      const cpDigits = cpRes.data.text.match(/\d{3,4}/);
+      if (cpDigits) extractedCP = parseInt(cpDigits[0], 10);
+
+      const nW = Math.round(canvas.width * 0.6);
+      const nH = Math.round(canvas.height * 0.06);
+      const nameCanvas = document.createElement('canvas');
+      nameCanvas.width = nW;
+      nameCanvas.height = nH;
+      nameCanvas.getContext('2d').drawImage(
+        canvas, 
+        Math.round(canvas.width * 0.2), 
+        Math.round(canvas.height * 0.38), 
+        nW, nH, 0, 0, nW, nH
+      );
+      const nameRes = await worker.recognize(nameCanvas);
+      const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
+      if (cleanName.length >= 3) extractedName = cleanName;
+
+      await worker.terminate();
     } catch (err) {
-      console.error(err);
-      setOcrStatus(`Error: ${err.message || "Could not read image"}`);
-    } finally {
-      setIsScanning(false);
+      console.warn('OCR error:', err);
+    }
+
+    const totalIv = ivs.atk + ivs.def + ivs.hp;
+    const ivPct = ((totalIv / 45) * 100).toFixed(1);
+
+    const tags = [];
+    if (totalIv === 45) tags.push('Hundo (100%)');
+    if (extractedCP <= 1500) tags.push('Great League');
+    else if (extractedCP <= 2500) tags.push('Ultra League');
+    else tags.push('Master League');
+
+    setActiveRecord({
+      id: 'poke_' + Date.now(),
+      name: extractedName,
+      cp: extractedCP,
+      atk: ivs.atk,
+      def: ivs.def,
+      hp: ivs.hp,
+      ivPercentage: parseFloat(ivPct),
+      fastMove,
+      chargedMove,
+      tags,
+      screenshot: dataUrl,
+      createdAt: Date.now()
+    });
+
+    setIsModalOpen(true);
+    setIsProcessing(false);
+    setStatusMsg('');
+  };
+
+  const handleSaveModal = async () => {
+    if (!activeRecord) return;
+    await saveRecord(activeRecord);
+    await loadAll();
+    setIsModalOpen(false);
+    setActiveRecord(null);
+  };
+
+  const handleDelete = async (id, e) => {
+    e.stopPropagation();
+    if (confirm('Delete this record?')) {
+      await deleteRecord(id);
+      loadAll();
     }
   };
 
-  const handleAddPokemon = (e) => {
-    e.preventDefault();
-    if (!formData.name) return;
-    const newEntry = {
-      ...formData,
-      id: Date.now(),
-      cp: Number(formData.cp) || 0,
-      ivAtk: Number(formData.ivAtk),
-      ivDef: Number(formData.ivDef),
-      ivHp: Number(formData.ivHp)
+  const exportJSON = () => {
+    const blob = new Blob([JSON.stringify(records, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pokevault_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+  };
+
+  const importJSON = (file) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const list = JSON.parse(e.target.result);
+        if (Array.isArray(list)) {
+          for (let item of list) {
+            await saveRecord(item);
+          }
+          await loadAll();
+          alert('Import completed successfully!');
+        }
+      } catch (err) {
+        alert('Invalid JSON file format.');
+      }
     };
-    setInventory([newEntry, ...inventory]);
-    setFormData({ name: "", cp: "", form: "Regular", ivAtk: 15, ivDef: 15, ivHp: 15, fastMove: "", chargedMove: "" });
-    setUploadedPreview(null);
-    setOcrStatus("");
-    setRawOcrText("");
-    setActiveTab("inventory");
+    reader.readAsText(file);
   };
 
-  const removePokemon = (id) => {
-    setInventory(inventory.filter((p) => p.id !== id));
-  };
-
-  const findOwnedCounters = (counterName) => {
-    const cleanCounter = counterName.replace(/^(Mega|Shadow|Primal)\s*/i, "").trim().toLowerCase();
-    return inventory.filter((item) => {
-      const cleanItem = item.name.replace(/^(Mega|Shadow|Primal)\s*/i, "").trim().toLowerCase();
-      return cleanItem.includes(cleanCounter) || cleanCounter.includes(cleanItem);
-    });
-  };
-
-  const activeBossData = RAID_BOSS_COUNTERS[selectedBoss];
+  const filteredRecords = records.filter(r => {
+    const matchesSearch = r.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          r.fastMove.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          r.chargedMove.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          r.cp.toString().includes(searchTerm);
+    const matchesTag = filterTag === 'ALL' || r.tags.includes(filterTag);
+    return matchesSearch && matchesTag;
+  });
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
-      <header className="bg-slate-800 border-b border-slate-700 px-6 py-4 flex flex-wrap justify-between items-center gap-4">
-        <h1 className="text-xl font-bold tracking-wide text-amber-400 flex items-center gap-2">
-          ⚡ PoGo Counter Scout
-        </h1>
-        <div className="flex bg-slate-900 rounded-lg p-1 border border-slate-700">
-          <button
-            onClick={() => setActiveTab("search")}
-            className={`px-4 py-1.5 text-sm font-semibold rounded-md transition ${
-              activeTab === "search" ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"
-            }`}
-          >
-            Counters
-          </button>
-          <button
-            onClick={() => setActiveTab("add")}
-            className={`px-4 py-1.5 text-sm font-semibold rounded-md transition ${
-              activeTab === "add" ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"
-            }`}
-          >
-            + Add / Scan
-          </button>
-          <button
-            onClick={() => setActiveTab("inventory")}
-            className={`px-4 py-1.5 text-sm font-semibold rounded-md transition ${
-              activeTab === "inventory" ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"
-            }`}
-          >
-            My Box ({inventory.length})
-          </button>
+    <div className="min-h-screen bg-slate-950 text-slate-100 pb-16 font-sans">
+      <header className="border-b border-slate-800 bg-slate-900/80 sticky top-0 z-30 backdrop-blur-md px-4 py-3">
+        <div className="max-w-6xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-rose-500 to-amber-400 flex items-center justify-center shadow-lg shadow-rose-500/20">
+              <Sparkles className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h1 className="font-bold text-lg leading-tight">PokéVault</h1>
+              <p className="text-xs text-slate-400">Appraisal & Moveset Scanner</p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={exportJSON}
+              title="Export JSON Backup"
+              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs flex items-center gap-1.5"
+            >
+              <Download className="w-4 h-4" />
+              <span className="hidden sm:inline">Export</span>
+            </button>
+            <label 
+              title="Import JSON Backup"
+              className="cursor-pointer p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs flex items-center gap-1.5"
+            >
+              <UploadCloud className="w-4 h-4" />
+              <span className="hidden sm:inline">Import</span>
+              <input type="file" accept=".json" className="hidden" onChange={(e) => e.target.files?.[0] && importJSON(e.target.files[0])} />
+            </label>
+            <label className="cursor-pointer flex items-center gap-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 px-4 py-2 rounded-xl text-sm font-semibold shadow-md active:scale-95 transition-all">
+              <Upload className="w-4 h-4" />
+              <span>Scan Screenshot</span>
+              <input 
+                type="file" 
+                accept="image/*" 
+                className="hidden" 
+                onChange={(e) => e.target.files?.[0] && processScreenshot(e.target.files[0])}
+              />
+            </label>
+          </div>
         </div>
       </header>
 
-      <main className="p-4 sm:p-6 max-w-5xl mx-auto w-full flex-1">
-        {activeTab === "search" && (
-          <div className="space-y-6">
-            <div className="bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4">
-              <div>
-                <label className="text-xs uppercase text-slate-400 font-bold block mb-1">
-                  Type Raid Boss Name (Live Search)
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="Search e.g. Rayquaza, Kyogre, Necrozma..."
-                    value={bossQuery}
-                    onChange={(e) => setBossQuery(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-white font-medium focus:outline-none focus:border-amber-400 pl-10"
-                  />
-                  <span className="absolute left-3 top-2.5 text-slate-400 text-lg">🔍</span>
-                </div>
-              </div>
+      <main className="max-w-6xl mx-auto px-4 mt-6">
+        <div className="flex flex-col md:flex-row gap-3 mb-6">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+            <input 
+              type="text"
+              placeholder="Search by Pokémon name, CP, or Moveset..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors"
+            />
+          </div>
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
+            {['ALL', 'Hundo (100%)', 'Great League', 'Ultra League', 'Master League'].map(tag => (
+              <button
+                key={tag}
+                onClick={() => setFilterTag(tag)}
+                className={`px-3 py-2 rounded-lg font-medium whitespace-nowrap transition-colors ${
+                  filterTag === tag 
+                    ? 'bg-cyan-500 text-slate-950 font-bold' 
+                    : 'bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        </div>
 
-              <div className="flex flex-wrap gap-2">
-                {filteredBosses.length > 0 ? (
-                  filteredBosses.map((boss) => (
-                    <button
-                      key={boss}
-                      onClick={() => {
-                        setSelectedBoss(boss);
-                        setBossQuery("");
-                      }}
-                      className={`px-3 py-1 text-xs rounded-full font-semibold border transition ${
-                        selectedBoss === boss
-                          ? "bg-amber-500 text-slate-950 border-amber-400 shadow"
-                          : "bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-500"
-                      }`}
-                    >
-                      {boss}
-                    </button>
-                  ))
-                ) : (
-                  <span className="text-xs text-rose-400">No boss matching "{bossQuery}"</span>
-                )}
-              </div>
-
-              {activeBossData && (
-                <div className="pt-3 border-t border-slate-700 flex flex-wrap gap-6 text-sm">
-                  <div>
-                    <span className="text-slate-400 text-xs block">Active Boss:</span>
-                    <span className="font-bold text-amber-400 text-base">{selectedBoss}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 text-xs block">Types:</span>
-                    <span className="font-semibold">{activeBossData.types.join(" / ")}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 text-xs block">Weaknesses:</span>
-                    <span className="font-semibold text-rose-400">{activeBossData.weaknesses.join(", ")}</span>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {activeBossData && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {activeBossData.counters.map((c, idx) => {
-                  const owned = findOwnedCounters(c.name);
-                  const isOwned = owned.length > 0;
-
-                  return (
-                    <div
-                      key={idx}
-                      className={`p-4 rounded-xl border transition relative ${
-                        isOwned
-                          ? "bg-emerald-950/30 border-emerald-500/80 ring-1 ring-emerald-500/40"
-                          : "bg-slate-800 border-slate-700"
-                      }`}
-                    >
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 className="font-bold text-lg">{c.name}</h3>
-                            <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300 font-mono">
-                              {c.tier}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-400 mt-1">
-                            Moves: <span className="text-slate-200">{c.fast}</span> + <span className="text-slate-200">{c.charged}</span>
-                          </p>
-                        </div>
-
-                        {isOwned ? (
-                          <span className="bg-emerald-500 text-slate-950 text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wider shadow">
-                            ✓ Ready ({owned.length})
-                          </span>
-                        ) : (
-                          <span className="text-xs text-slate-500 italic">Not in Box</span>
-                        )}
-                      </div>
-
-                      {isOwned && (
-                        <div className="mt-3 pt-3 border-t border-emerald-900/50 space-y-1">
-                          <p className="text-xs font-bold text-emerald-400 uppercase">Available in Box:</p>
-                          {owned.map((p) => (
-                            <div key={p.id} className="text-xs bg-emerald-950/60 p-2 rounded flex justify-between items-center text-emerald-200">
-                              <span>
-                                {p.form !== "Regular" && <strong className="text-amber-400">[{p.form}] </strong>}
-                                <strong>CP {p.cp}</strong> | {p.fastMove || "Fast"} / {p.chargedMove || "Charged"}
-                              </span>
-                              <span className="font-mono bg-emerald-900 px-1.5 py-0.5 rounded">
-                                {p.ivAtk}/{p.ivDef}/{p.ivHp} ({Math.round(((p.ivAtk + p.ivDef + p.ivHp) / 45) * 100)}%)
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+        {isProcessing && (
+          <div className="mb-6 p-4 rounded-xl bg-cyan-950/40 border border-cyan-800/50 flex items-center gap-3">
+            <RefreshCw className="w-5 h-5 text-cyan-400 animate-spin" />
+            <p className="text-sm font-medium text-cyan-200">{statusMsg}</p>
           </div>
         )}
 
-        {activeTab === "add" && (
-          <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 sm:p-6 max-w-xl mx-auto shadow-xl space-y-6">
-            <div>
-              <h2 className="text-lg font-bold text-amber-400 mb-1">Add or Scan Pokémon</h2>
-              <p className="text-xs text-slate-400">
-                Pick a screenshot from your photo library. The scanner will enhance contrast and read the CP and name.
-              </p>
-            </div>
-
-            <div className="border-2 border-dashed border-slate-600 hover:border-amber-400 rounded-xl p-4 text-center bg-slate-900/50">
-              <input
-                type="file"
-                accept="image/*"
-                id="screenshot-input"
-                onChange={handleImageUpload}
-                className="hidden"
-              />
-              <label htmlFor="screenshot-input" className="cursor-pointer block">
-                {uploadedPreview ? (
-                  <div className="space-y-2">
-                    <img src={uploadedPreview} alt="Preview" className="max-h-48 mx-auto rounded shadow border border-slate-700" />
-                    <span className="text-xs text-amber-400 underline block">Tap to pick another image</span>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredRecords.map((item) => (
+            <div 
+              key={item.id}
+              className="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-4 shadow-xl hover:border-slate-700 transition-all flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-start justify-between mb-3">
+                  <div>
+                    <h3 className="font-extrabold text-lg text-slate-100 tracking-wide">
+                      {item.name} - CP {item.cp}
+                    </h3>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-xs px-2 py-0.5 rounded font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        {item.ivPercentage}% IV
+                      </span>
+                      <span className="text-xs text-slate-400">
+                        ({item.atk}/{item.def}/{item.hp})
+                      </span>
+                    </div>
                   </div>
-                ) : (
-                  <div className="py-4">
-                    <span className="text-3xl block mb-2">📸</span>
-                    <span className="text-sm font-semibold text-slate-300 block">Tap to select Screenshot from Photos</span>
-                    <span className="text-xs text-slate-500">Appraisal or Pokémon detail screen</span>
+                  <button 
+                    onClick={(e) => handleDelete(item.id, e)}
+                    className="text-slate-500 hover:text-rose-400 p-1"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="space-y-1.5 my-3 bg-slate-950/60 p-3 rounded-xl border border-slate-800/50">
+                  {['ATK', 'DEF', 'HP'].map((stat, idx) => {
+                    const val = idx === 0 ? item.atk : idx === 1 ? item.def : item.hp;
+                    const isMax = val === 15;
+                    return (
+                      <div key={stat} className="flex items-center gap-2 text-xs">
+                        <span className="w-7 font-bold text-slate-400">{stat}</span>
+                        <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden flex gap-0.5">
+                          <div 
+                            className={`h-full transition-all ${
+                              isMax ? 'bg-rose-500 shadow-sm shadow-rose-500/50' : 'bg-amber-400'
+                            }`}
+                            style={{ width: `${(val / 15) * 100}%` }}
+                          />
+                        </div>
+                        <span className="w-5 text-right font-bold text-slate-300">{val}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="space-y-1 text-xs mt-3">
+                  <div className="flex items-center gap-2 text-slate-300">
+                    <Zap className="w-3.5 h-3.5 text-cyan-400" />
+                    <span className="font-semibold text-slate-400">Fast:</span>
+                    <span>{item.fastMove || '—'}</span>
                   </div>
-                )}
-              </label>
-
-              {ocrStatus && (
-                <div className={`mt-3 text-xs font-semibold ${isScanning ? "text-amber-400 animate-pulse" : "text-emerald-400"}`}>
-                  {ocrStatus}
-                </div>
-              )}
-
-              {/* Debug toggle in case OCR misreads on certain phones */}
-              {rawOcrText && (
-                <details className="mt-3 text-left text-xs text-slate-400 bg-slate-950 p-2 rounded">
-                  <summary className="cursor-pointer text-slate-300">View Detected Raw Text</summary>
-                  <pre className="mt-2 whitespace-pre-wrap font-mono">{rawOcrText}</pre>
-                </details>
-              )}
-            </div>
-
-            <form onSubmit={handleAddPokemon} className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-bold text-slate-300 block mb-1">Species Name</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Mamoswine"
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm focus:border-amber-400 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-slate-300 block mb-1">CP</label>
-                  <input
-                    type="number"
-                    placeholder="e.g. 3120"
-                    value={formData.cp}
-                    onChange={(e) => setFormData({ ...formData, cp: e.target.value })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm focus:border-amber-400 focus:outline-none"
-                  />
+                  <div className="flex items-center gap-2 text-slate-300">
+                    <Shield className="w-3.5 h-3.5 text-rose-400" />
+                    <span className="font-semibold text-slate-400">Charged:</span>
+                    <span>{item.chargedMove || '—'}</span>
+                  </div>
                 </div>
               </div>
 
-              <div>
-                <label className="text-xs font-bold text-slate-300 block mb-1">Form / Variant</label>
-                <div className="flex gap-2">
-                  {["Regular", "Shadow", "Purified", "Mega"].map((f) => (
-                    <button
-                      key={f}
-                      type="button"
-                      onClick={() => setFormData({ ...formData, form: f })}
-                      className={`flex-1 py-1.5 text-xs rounded-lg font-bold border transition ${
-                        formData.form === f
-                          ? "bg-amber-500 border-amber-400 text-slate-950"
-                          : "bg-slate-900 border-slate-700 text-slate-300"
-                      }`}
-                    >
-                      {f}
-                    </button>
+              <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
+                <div className="flex flex-wrap gap-1">
+                  {item.tags.map(t => (
+                    <span key={t} className="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-slate-300">
+                      {t}
+                    </span>
                   ))}
                 </div>
+                <button
+                  onClick={() => setInspectedImage(item.screenshot)}
+                  className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-medium"
+                >
+                  <ImageIcon className="w-3 h-3" /> View Pic
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {filteredRecords.length === 0 && !isProcessing && (
+            <div className="col-span-full py-16 text-center text-slate-500">
+              <Layers className="w-12 h-12 mx-auto mb-3 opacity-30" />
+              <p>No Pokémon recorded yet. Click "Scan Screenshot" to upload.</p>
+            </div>
+          )}
+        </div>
+      </main>
+
+      {isModalOpen && activeRecord && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-lg">Verify Scanned Appraisal</h3>
+              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {debugCropUrl && (
+              <div className="mb-4 bg-slate-950 p-3 rounded-xl border border-slate-800 text-center">
+                <p className="text-[11px] text-slate-400 mb-2">Detected Appraisal Card Region:</p>
+                <img src={debugCropUrl} alt="Bar Region" className="h-16 mx-auto rounded border border-slate-700 object-contain" />
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Species Name</label>
+                  <input
+                    type="text"
+                    value={activeRecord.name}
+                    onChange={(e) => setActiveRecord({ ...activeRecord, name: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Combat Power (CP)</label>
+                  <input
+                    type="number"
+                    value={activeRecord.cp}
+                    onChange={(e) => setActiveRecord({ ...activeRecord, cp: parseInt(e.target.value, 10) || 0 })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
               </div>
 
-              <div className="bg-slate-900 p-4 rounded-lg border border-slate-700 space-y-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-amber-400 block">Appraisal (IVs / 15)</span>
-                {[
-                  { key: "ivAtk", label: "Attack" },
-                  { key: "ivDef", label: "Defense" },
-                  { key: "ivHp", label: "HP" }
-                ].map(({ key, label }) => (
-                  <div key={key} className="flex items-center gap-3">
-                    <span className="text-xs font-semibold w-16 text-slate-300">{label}:</span>
+              <div className="bg-slate-950 p-4 rounded-xl space-y-3">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs font-bold text-slate-300">IV Stats (0 - 15)</span>
+                  <span className="text-xs font-bold text-amber-400">
+                    {activeRecord.ivPercentage}% ({activeRecord.atk + activeRecord.def + activeRecord.hp}/45)
+                  </span>
+                </div>
+                {['atk', 'def', 'hp'].map((stat) => (
+                  <div key={stat} className="flex items-center gap-3">
+                    <span className="w-10 text-xs font-bold uppercase text-slate-400">{stat}</span>
                     <input
                       type="range"
                       min="0"
                       max="15"
-                      value={formData[key]}
-                      onChange={(e) => setFormData({ ...formData, [key]: Number(e.target.value) })}
-                      className="flex-1 accent-amber-500"
+                      value={activeRecord[stat]}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
+                        const updated = { ...activeRecord, [stat]: val };
+                        const total = updated.atk + updated.def + updated.hp;
+                        updated.ivPercentage = parseFloat(((total / 45) * 100).toFixed(1));
+                        setActiveRecord(updated);
+                      }}
+                      className="flex-1 accent-amber-400 cursor-pointer"
                     />
-                    <span className="text-xs font-mono font-bold w-6 text-right">{formData[key]}</span>
+                    <span className="w-6 text-right font-bold text-sm text-slate-200">{activeRecord[stat]}</span>
                   </div>
                 ))}
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-bold text-slate-300 block mb-1">Fast Move</label>
+                  <label className="text-xs text-slate-400 block mb-1">Fast Attack</label>
                   <input
                     type="text"
-                    placeholder="e.g. Powder Snow"
-                    value={formData.fastMove}
-                    onChange={(e) => setFormData({ ...formData, fastMove: e.target.value })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm focus:border-amber-400 focus:outline-none"
+                    value={activeRecord.fastMove}
+                    onChange={(e) => setActiveRecord({ ...activeRecord, fastMove: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-slate-300 block mb-1">Charged Move</label>
+                  <label className="text-xs text-slate-400 block mb-1">Charged Attack</label>
                   <input
                     type="text"
-                    placeholder="e.g. Avalanche"
-                    value={formData.chargedMove}
-                    onChange={(e) => setFormData({ ...formData, chargedMove: e.target.value })}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm focus:border-amber-400 focus:outline-none"
+                    value={activeRecord.chargedMove}
+                    onChange={(e) => setActiveRecord({ ...activeRecord, chargedMove: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
                   />
                 </div>
               </div>
-
-              <button
-                type="submit"
-                className="w-full mt-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-2.5 rounded-lg shadow transition"
-              >
-                Save to My Box
-              </button>
-            </form>
-          </div>
-        )}
-
-        {activeTab === "inventory" && (
-          <div className="space-y-4">
-            <div className="flex justify-between items-center">
-              <h2 className="text-lg font-bold">My Pokémon Box ({inventory.length})</h2>
-              <button
-                onClick={() => setActiveTab("add")}
-                className="text-xs bg-slate-800 hover:bg-slate-700 border border-slate-600 px-3 py-1.5 rounded-lg"
-              >
-                + Add / Scan Another
-              </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {inventory.map((p) => {
-                const totalIV = p.ivAtk + p.ivDef + p.ivHp;
-                const ivPercent = Math.round((totalIV / 45) * 100);
-
-                return (
-                  <div key={p.id} className="bg-slate-800 border border-slate-700 rounded-xl p-4 flex flex-col justify-between">
-                    <div>
-                      <div className="flex justify-between items-start mb-2">
-                        <div>
-                          <span className="text-xs text-amber-400 font-bold">{p.form}</span>
-                          <h3 className="font-bold text-lg">{p.name}</h3>
-                        </div>
-                        <span className="text-sm font-mono font-extrabold text-slate-300">CP {p.cp}</span>
-                      </div>
-
-                      <div className="text-xs text-slate-400 space-y-1 my-3 bg-slate-900/60 p-2.5 rounded-lg border border-slate-700/50">
-                        <div>⚔️ Fast: <span className="text-slate-200">{p.fastMove || "Not Set"}</span></div>
-                        <div>💥 Charged: <span className="text-slate-200">{p.chargedMove || "Not Set"}</span></div>
-                      </div>
-
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-slate-400">IV: {p.ivAtk}/{p.ivDef}/{p.ivHp}</span>
-                        <span className={`font-bold ${ivPercent === 100 ? "text-amber-400" : "text-emerald-400"}`}>
-                          {ivPercent}% {ivPercent === 100 ? "★ 4★ (Hundo)" : totalIV >= 37 ? "★ 3★" : ""}
-                        </span>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => removePokemon(p.id)}
-                      className="mt-4 text-xs text-rose-400 hover:text-rose-300 text-right w-full"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                );
-              })}
+            <div className="flex gap-2 justify-end mt-6">
+              <button
+                onClick={() => setIsModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-sm font-semibold bg-slate-800 hover:bg-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveModal}
+                className="px-5 py-2 rounded-xl text-sm font-semibold bg-cyan-500 text-slate-950 hover:bg-cyan-400 font-bold"
+              >
+                Confirm & Save
+              </button>
             </div>
           </div>
-        )}
-      </main>
+        </div>
+      )}
+
+      {inspectedImage && (
+        <div 
+          onClick={() => setInspectedImage(null)}
+          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4 cursor-pointer"
+        >
+          <img src={inspectedImage} alt="Full screenshot" className="max-h-[90vh] rounded-lg shadow-2xl object-contain" />
+        </div>
+      )}
     </div>
   );
 }
