@@ -92,21 +92,23 @@ export default function App() {
     return [h * 360, s * 100, l * 100];
   };
 
+  // 1. Calibrated IV Bar Analyzer
   const analyzeIVBars = (canvas) => {
     const ctx = canvas.getContext('2d');
     const W = canvas.width;
     const H = canvas.height;
 
-    const startX = Math.round(W * 0.118);
-    const endX = Math.round(W * 0.462);
+    // Fully calibrated inner track boundaries for 20:9 displays
+    const startX = Math.round(W * 0.115);
+    const endX = Math.round(W * 0.468);
     const totalBarWidth = endX - startX;
 
-    const barYPercentages = [0.778, 0.823, 0.862];
+    const barYPercentages = [0.776, 0.822, 0.864];
 
     const ivs = barYPercentages.map((yPct) => {
       const yCenter = Math.round(H * yPct);
       let filledPixels = 0;
-      const offsets = [-4, -2, -1, 0, 1, 2, 4];
+      const offsets = [-3, -1, 0, 1, 3];
 
       for (let x = startX; x <= endX; x++) {
         let isFilled = false;
@@ -128,33 +130,47 @@ export default function App() {
       }
 
       const ratio = Math.min(1, Math.max(0, filledPixels / totalBarWidth));
-      return Math.round(ratio * 15);
+      // Exactly 15 units divided across 3 tick segments
+      return Math.min(15, Math.max(0, Math.round(ratio * 15)));
     });
 
     return {
-      atk: Math.min(15, Math.max(0, ivs[0] ?? 0)),
-      def: Math.min(15, Math.max(0, ivs[1] ?? 0)),
-      hp: Math.min(15, Math.max(0, ivs[2] ?? 0))
+      atk: ivs[0] ?? 0,
+      def: ivs[1] ?? 0,
+      hp: ivs[2] ?? 0
     };
   };
 
+  // 2. Dynamic Moveset Reader (Locates the tab header first)
   const extractMovesFromCanvas = async (worker, canvas) => {
-    // Crop directly to the moves section (below the GYMS & RAIDS tab)
-    const mW = Math.round(canvas.width * 0.75);
-    const mH = Math.round(canvas.height * 0.16);
+    // Crop the entire lower 40% where attacks can reside (Mega/Primal shifts included)
+    const mW = Math.round(canvas.width * 0.88);
+    const mH = Math.round(canvas.height * 0.35);
     const moveCanvas = document.createElement('canvas');
     moveCanvas.width = mW;
     moveCanvas.height = mH;
     moveCanvas.getContext('2d').drawImage(
       canvas,
-      Math.round(canvas.width * 0.12),
-      Math.round(canvas.height * 0.81),
+      Math.round(canvas.width * 0.06),
+      Math.round(canvas.height * 0.65),
       mW, mH, 0, 0, mW, mH
     );
 
     const moveRes = await worker.recognize(moveCanvas);
-    const lines = moveRes.data.lines
-      .map(l => l.text.trim())
+    const rawLines = moveRes.data.lines.map(l => l.text.trim());
+
+    // Find the line index where "GYMS" or "RAIDS" appears
+    let tabIndex = rawLines.findIndex(t => {
+      const up = t.toUpperCase();
+      return up.includes('GYM') || up.includes('RAID') || up.includes('TRAINER');
+    });
+
+    // If tab header is found, scan lines starting immediately below it
+    const candidateLines = (tabIndex !== -1 ? rawLines.slice(tabIndex + 1) : rawLines)
+      .map(t => {
+        // Remove trailing move power numbers, type icons, or single stray letters (like "140", "H", "I")
+        return t.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim();
+      })
       .filter(t => {
         const up = t.toUpperCase();
         return (
@@ -166,22 +182,16 @@ export default function App() {
           !up.includes('STARDUST') &&
           !up.includes('CANDY') &&
           !up.includes('POWER') &&
-          !up.includes('ATTACK') &&
-          !/^\d+$/.test(t)
+          !up.includes('NEW ATTACK') &&
+          !up.includes('PRIMAL') &&
+          !up.includes('REVERSION')
         );
       });
 
-    let fast = '';
-    let charged = '';
-
-    if (lines.length >= 1) {
-      fast = lines[0].replace(/[^a-zA-Z\s]/g, '').trim();
-    }
-    if (lines.length >= 2) {
-      charged = lines[1].replace(/[^a-zA-Z\s]/g, '').trim();
-    }
-
-    return { fast, charged };
+    return {
+      fast: candidateLines[0] || '',
+      charged: candidateLines[1] || ''
+    };
   };
   const handleFilesSelected = async (fileList) => {
     if (!fileList || fileList.length === 0) return;
