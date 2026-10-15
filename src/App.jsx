@@ -716,7 +716,7 @@ const matchNearestMove = (rawOcrText) => {
         )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {{filteredRecords.map((item) => (
+          {filteredRecords.map((item) => (
             <div 
               key={item.id}
               className="bg-slate-900/90 border border-slate-800/80 rounded-2xl p-4 shadow-xl hover:border-slate-700 transition-all flex flex-col justify-between"
