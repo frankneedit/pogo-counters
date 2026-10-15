@@ -4,7 +4,7 @@ import {
   RefreshCw, X, Layers, Image as ImageIcon, Download, UploadCloud, Plus
 } from 'lucide-react';
 import { createWorker } from 'tesseract.js';
-
+/**
 const DB_NAME = 'PokeGoVaultDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'pokemon_records';
@@ -52,7 +52,72 @@ const deleteRecord = async (id) => {
     tx.onerror = () => reject(tx.error);
   });
 };
+**/
 
+import { supabase } from './supabase';
+
+const getAllRecords = async () => {
+  const { data, error } = await supabase
+    .from('pokemon_records')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Error fetching records:', error);
+    return [];
+  }
+
+  // Map PostgreSQL snake_case columns back to the camelCase used in your React UI
+  return (data || []).map((row) => ({
+    id: row.id,
+    name: row.name,
+    cp: row.cp,
+    atk: row.atk,
+    def: row.def,
+    hp: row.hp,
+    ivPercentage: Number(row.iv_percentage),
+    fastMove: row.fast_move || '',
+    chargedMove: row.charged_move || '',
+    tags: row.tags || [],
+    screenshot: row.screenshot_url || '',
+    createdAt: Number(row.created_at)
+  }));
+};
+
+const saveRecord = async (record) => {
+  const payload = {
+    id: record.id,
+    name: record.name,
+    cp: record.cp,
+    atk: record.atk,
+    def: record.def,
+    hp: record.hp,
+    iv_percentage: record.ivPercentage,
+    fast_move: record.fastMove,
+    charged_move: record.chargedMove,
+    tags: record.tags || [],
+    created_at: record.createdAt || Date.now()
+  };
+
+  const { error } = await supabase
+    .from('pokemon_records')
+    .upsert(payload);
+
+  if (error) {
+    console.error('Error saving record to Supabase:', error);
+  }
+};
+
+const deleteRecord = async (id) => {
+  const { error } = await supabase
+    .from('pokemon_records')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('Error deleting record from Supabase:', error);
+  }
+};
 export default function App() {
   const [records, setRecords] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
