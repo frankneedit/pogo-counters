@@ -91,6 +91,15 @@ export const META_KNOWLEDGE_BASE = {
     isPvp: true,
     pvpLeague: "Master League Premier",
     notes: "Top-tier Fairy raid attacker and Mega evolution. Charm + Dazzling Gleam deals premier Fairy damage."
+  },snorlax: {
+    idealFast: "Lick", // or Zen Headbutt for Gym defense
+    idealCharged: ["Body Slam", "Superpower", "Earthquake"],
+    isRaidAttacker: false,
+    isGymAttacker: false,
+    isGymDefender: true,
+    isPvp: true,
+    pvpLeague: "Master League Premier / Ultra League",
+    notes: "Premier Gym Defender due to immense Stamina pool. Zen Headbutt + Body Slam punishes incoming Fighting-type attackers."
   },
 };
 
