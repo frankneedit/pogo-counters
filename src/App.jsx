@@ -217,7 +217,7 @@ export default function App() {
     const ivs = barYPercentages.map((yPct) => {
       const yCenter = Math.round(H * yPct);
       let filledPixels = 0;
-      let redCount = 0;
+      let coralRedPixels = 0;
       const offsets = [-3, -1, 0, 1, 3];
 
       for (let x = startX; x <= endX; x++) {
@@ -229,8 +229,11 @@ export default function App() {
           const [r, g, b] = [pixel[0], pixel[1], pixel[2]];
           const [h, s, l] = rgbToHsl(r, g, b);
 
-          const isOrange = (h >= 16 && h <= 55 && s >= 30 && l >= 25 && l <= 80);
-          const isCoralRed = (r > 195 && g < 110 && b < 130 && s >= 40);
+          // Orange track (regular progress)
+          const isOrange = (h >= 16 && h <= 55 && s >= 30 && l >= 25 && l <= 85);
+          
+          // Coral-Pink/Red track (maxed 15 bar: hue 340-360 or 0-15, red dominant)
+          const isCoralRed = ((h >= 340 || h <= 15) && s >= 28 && l >= 35 && l <= 80 && r > g + 20);
 
           if (isCoralRed) {
             isRed = true;
@@ -242,11 +245,11 @@ export default function App() {
           }
         }
         if (isFilled) filledPixels++;
-        if (isRed) redCount++;
+        if (isRed) coralRedPixels++;
       }
 
-      // Only count as 15 if a dominant portion of the filled pixels is true coral red
-      if (redCount > totalBarWidth * 0.45) {
+      // If the bar is filled with coral-red, it is a guaranteed 15
+      if (coralRedPixels > totalBarWidth * 0.40) {
         return 15;
       }
 
@@ -260,6 +263,7 @@ export default function App() {
       hp: ivs[2] ?? 0
     };
   };
+
   const extractMovesFromCanvas = async (worker, canvas) => {
     const mW = Math.round(canvas.width * 0.88);
     const mH = Math.round(canvas.height * 0.35);
@@ -276,12 +280,28 @@ export default function App() {
     const moveRes = await worker.recognize(moveCanvas);
     const rawLines = moveRes.data.lines.map(l => l.text.trim());
 
-    let tabIndex = rawLines.findIndex(t => {
+    // 1. Start AFTER the Gyms & Raids header
+    let startIdx = rawLines.findIndex(t => {
       const up = t.toUpperCase();
       return up.includes('GYM') || up.includes('RAID') || up.includes('TRAINER');
     });
+    const linesAfterTab = startIdx !== -1 ? rawLines.slice(startIdx + 1) : rawLines;
 
-    const candidateLines = (tabIndex !== -1 ? rawLines.slice(tabIndex + 1) : rawLines)
+    // 2. STOP immediately once reaching "NEW ATTACK" or trade metadata
+    let endIdx = linesAfterTab.findIndex(t => {
+      const up = t.toUpperCase();
+      return (
+        up.includes('NEW ATTACK') || 
+        up.includes('OBTAINED') || 
+        up.includes('TRADE') ||
+        up.includes('CAUGHT')
+      );
+    });
+    const moveAreaLines = endIdx !== -1 ? linesAfterTab.slice(0, endIdx) : linesAfterTab;
+
+    // 3. Clean remaining candidate move names
+    const candidateLines = moveAreaLines
+      .map(t => t.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim())
       .filter(t => {
         const up = t.toUpperCase();
         return (
@@ -293,12 +313,8 @@ export default function App() {
           !up.includes('STARDUST') &&
           !up.includes('CANDY') &&
           !up.includes('POWER') &&
-          !up.includes('NEW ATTACK') &&
           !up.includes('PRIMAL') &&
-          !up.includes('REVERSION') &&
-          !up.includes('OBTAINED') &&
-          !up.includes('TRADE') &&
-          !up.includes('CAUGHT')
+          !up.includes('REVERSION')
         );
       });
 
