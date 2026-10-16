@@ -507,18 +507,6 @@ const extractMovesFromCanvas = async (worker, canvas) => {
       loadedScreens.sort((a, b) => (b.isAppraisal ? 1 : 0) - (a.isAppraisal ? 1 : 0));
 
       const worker = await createWorker('eng');
-      const current = {
-          name: '',
-          cp: 0,
-          atk: 0,
-          def: 0,
-          hp: 0,
-          ivPercentage: 0,
-          fastMove: '',
-          chargedMove: '',
-          types: [],
-          screenshot: ''
-        };
       let current = activeRecord ? { ...activeRecord } : {
         id: 'poke_' + Date.now(),
         name: '',
