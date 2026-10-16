@@ -213,6 +213,65 @@ export default function App() {
     loadAll();
     syncLiveMovesFromApi(); // Runs in the background once on startup
   }, []);
+  // Listen for incoming 1-click import links from Gemini
+  useEffect(() => {
+    const handleUrlImport = async () => {
+      const params = new URLSearchParams(window.location.search);
+      const name = params.get('name');
+      const cp = params.get('cp');
+
+      // Only run if the link contains Pokémon data
+      if (name && cp) {
+        setStatusMsg(`Importing ${name} from Gemini link...`);
+        setIsProcessing(true);
+
+        const atk = parseInt(params.get('atk') || '0', 10);
+        const def = parseInt(params.get('def') || '0', 10);
+        const hp = parseInt(params.get('hp') || '0', 10);
+        const totalIv = atk + def + hp;
+        const ivPercentage = parseFloat(((totalIv / 45) * 100).toFixed(1));
+
+        // Fetch official types automatically
+        const types = await fetchPokemonTypesOnline(name);
+
+        const tags = [];
+        if (totalIv === 45) tags.push('Hundo (100%)');
+        const numCp = parseInt(cp, 10);
+        if (numCp <= 1500) tags.push('Great League');
+        else if (numCp <= 2500) tags.push('Ultra League');
+        else tags.push('Master League');
+
+        const newRecord = {
+          id: 'poke_' + Date.now(),
+          name,
+          cp: numCp,
+          atk,
+          def,
+          hp,
+          ivPercentage,
+          fastMove: params.get('fast') || '',
+          chargedMove: params.get('charged') || '',
+          tags,
+          types,
+          screenshot: '',
+          createdAt: Date.now()
+        };
+
+        await saveRecord(newRecord);
+        await loadAll();
+
+        setIsProcessing(false);
+        setStatusMsg('');
+
+        // Clean query params from the browser address bar without reloading
+        window.history.replaceState({}, document.title, window.location.pathname);
+        alert(`Successfully saved ${name} (${ivPercentage}% IV) to PokéVault!`);
+      }
+    };
+
+    handleUrlImport();
+  }, []);
+  
   const loadAll = async () => {
     const data = await getAllRecords();
     setRecords(data);
