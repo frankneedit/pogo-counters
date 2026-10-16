@@ -317,7 +317,37 @@ function rgbToHsl(r, g, b) {
     }
     return badgeGoldPixels > 35;
   };
+const checkIfAppraisalScreen = (canvas) => {
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
 
+    // 1. Appraisal screens always have the solid white bottom speech bubble strip
+    // Sample along the bottom center (Y ~ 88% - 94%, X ~ 50%)
+    let whitePixelCount = 0;
+    const probeX = Math.round(W * 0.50);
+    const startY = Math.round(H * 0.88);
+    const endY = Math.round(H * 0.94);
+
+    for (let y = startY; y <= endY; y += 2) {
+      const p = ctx.getImageData(probeX, y, 1, 1).data;
+      if (p[0] >= 235 && p[1] >= 235 && p[2] >= 235) {
+        whitePixelCount++;
+      }
+    }
+
+    // 2. Also check if the Team Leader appraisal star badge area (X ~ 12-16%, Y ~ 62-72%) has non-white content
+    const badgeX = Math.round(W * 0.14);
+    const badgeY = Math.round(H * 0.67);
+    const badgePixel = ctx.getImageData(badgeX, badgeY, 1, 1).data;
+    const [h, s, l] = rgbToHsl(badgePixel[0], badgePixel[1], badgePixel[2]);
+
+    // Badge is present if we detect gold/orange/pink hues or if the bottom speech bubble is white
+    const hasBadgeColor = ((h >= 15 && h <= 55) || (h >= 330 || h <= 15)) && s >= 20;
+    const hasWhiteBubble = whitePixelCount >= 8;
+
+    return hasBadgeColor || hasWhiteBubble;
+  };
   // 1. In analyzeIVBars: shifted slightly upward to center Attack, Defense, and HP
  const analyzeIVBars = (canvas) => {
     const ctx = canvas.getContext('2d');
