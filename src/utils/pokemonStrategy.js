@@ -81,7 +81,17 @@ export const META_KNOWLEDGE_BASE = {
     isPvp: true,
     pvpLeague: "Great & Ultra League",
     notes: "Exceptional Gym clearer against normal-type defenders. High value in PvP and Fighting raid teams."
-  }
+  },
+  gardevoir: {
+    idealFast: "Charm",
+    idealCharged: ["Dazzling Gleam", "Shadow Ball", "Synchronoise"],
+    isRaidAttacker: true,
+    isGymAttacker: true,
+    isGymDefender: true,
+    isPvp: true,
+    pvpLeague: "Master League Premier",
+    notes: "Top-tier Fairy raid attacker and Mega evolution. Charm + Dazzling Gleam deals premier Fairy damage."
+  },
 };
 
 // Analysis engine: evaluates appraisal, roles, and movesets
