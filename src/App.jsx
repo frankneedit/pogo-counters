@@ -84,7 +84,7 @@ const matchNearestMove = (rawOcrText) => {
   if (!rawOcrText || rawOcrText.length < 3) return "";
   const cleaned = rawOcrText.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim();
 
-  // 1. Direct case-insensitive substring search (prefer exact matches)
+  // 1. Direct case-insensitive substring search
   const lowerCleaned = cleaned.toLowerCase();
   for (const move of KNOWN_MOVES) {
     if (lowerCleaned.includes(move.toLowerCase()) || move.toLowerCase().includes(lowerCleaned)) {
@@ -199,17 +199,17 @@ export default function App() {
     return [h * 360, s * 100, l * 100];
   };
 
-  // --- RELIABLE SCREEN DETECTOR ---
+  // --- ACCURATE SCREEN DETECTOR ---
   const checkIfAppraisal = (canvas) => {
     const ctx = canvas.getContext('2d');
     const W = canvas.width;
     const H = canvas.height;
 
     // 1. Look for the Green "POWER UP" button that exists ONLY on moveset/profile screens
-    // Located roughly X: 12% - 40%, Y: 48% - 62%
+    // Located roughly X: 12% - 40%, Y: 46% - 62%
     let greenButtonPixels = 0;
     for (let x = Math.round(W * 0.12); x <= Math.round(W * 0.38); x += 8) {
-      for (let y = Math.round(H * 0.48); y <= Math.round(H * 0.62); y += 6) {
+      for (let y = Math.round(H * 0.46); y <= Math.round(H * 0.62); y += 6) {
         const p = ctx.getImageData(x, y, 1, 1).data;
         const [h, s, l] = rgbToHsl(p[0], p[1], p[2]);
         if (h >= 115 && h <= 170 && s >= 30 && l >= 30 && l <= 85) {
@@ -235,19 +235,18 @@ export default function App() {
     return whiteBubblePixels >= 8;
   };
 
-  // --- UNIVERSAL IV ANALYZER (WORKS FOR 0, 1, 2, 3, AND 4-STAR HUNDOS) ---
+  // --- SELF-CALIBRATING IV BAR ANALYZER ---
   const analyzeIVBars = (canvas) => {
     const ctx = canvas.getContext('2d');
     const W = canvas.width;
     const H = canvas.height;
 
-    // 1. Anchor to the top edge of the white dialogue speech bubble at bottom center
+    // 1. Locate the top boundary of the white bottom speech bubble
     const probeX = Math.round(W * 0.50);
     let bubbleTopY = -1;
 
-    for (let y = Math.round(H * 0.88); y >= Math.round(H * 0.75); y -= 2) {
+    for (let y = Math.round(H * 0.88); y >= Math.round(H * 0.74); y -= 2) {
       const p = ctx.getImageData(probeX, y, 1, 1).data;
-      // Leaving the white bubble into darker trainer coat
       if (p[0] < 220 || p[1] < 220 || p[2] < 220) {
         bubbleTopY = y;
         break;
@@ -258,19 +257,49 @@ export default function App() {
       bubbleTopY = Math.round(H * 0.89);
     }
 
-    // Exact bar centerlines measured upward from the speech bubble baseline
-    const barCenters = [
-      bubbleTopY - Math.round(H * 0.138), // Attack bar
-      bubbleTopY - Math.round(H * 0.095), // Defense bar
-      bubbleTopY - Math.round(H * 0.052)  // HP bar
-    ];
+    // 2. Scan down through the middle of the card (column at 26% width) to locate the 3 bar centers
+    const barProbeX = Math.round(W * 0.26);
+    const searchStartY = bubbleTopY - Math.round(H * 0.165);
+    const searchEndY = bubbleTopY - Math.round(H * 0.020);
+
+    const detectedBarCenters = [];
+    let insideBar = false;
+    let barStartY = 0;
+
+    for (let y = searchStartY; y <= searchEndY; y++) {
+      const p = ctx.getImageData(barProbeX, y, 1, 1).data;
+      const isWhite = (p[0] >= 235 && p[1] >= 235 && p[2] >= 235);
+
+      if (!isWhite && !insideBar) {
+        insideBar = true;
+        barStartY = y;
+      } else if (isWhite && insideBar) {
+        insideBar = false;
+        const barThickness = y - barStartY;
+        if (barThickness >= 4 && barThickness <= 26) {
+          detectedBarCenters.push(Math.round((barStartY + y) / 2));
+        }
+      }
+    }
+
+    let barCenters = [];
+    if (detectedBarCenters.length === 3) {
+      barCenters = detectedBarCenters;
+    } else if (detectedBarCenters.length > 3) {
+      barCenters = detectedBarCenters.slice(-3);
+    } else {
+      barCenters = [
+        bubbleTopY - Math.round(H * 0.138), // Attack
+        bubbleTopY - Math.round(H * 0.095), // Defense
+        bubbleTopY - Math.round(H * 0.052)  // HP
+      ];
+    }
 
     const startX = Math.round(W * 0.118);
     const endX = Math.round(W * 0.458);
     const totalBarWidth = endX - startX;
 
     const isCoralRed = (r, g, b) => {
-      // Pokémon GO maxed 15-bar coral red color (#e8535a)
       return r > 185 && g < 130 && b < 140 && (r - g > 50);
     };
 
@@ -282,7 +311,7 @@ export default function App() {
     const ivs = barCenters.map((yCenter) => {
       const vOffsets = [-5, -3, -1, 0, 1, 3, 5];
 
-      // A. Check for RED -> Instant 15!
+      // A. Check for coral red -> Guaranteed 15
       let redCount = 0;
       for (let x = startX; x <= endX; x += 2) {
         for (let dy of vOffsets) {
@@ -297,7 +326,7 @@ export default function App() {
         return 15;
       }
 
-      // B. Check if right tip is filled (100% capacity) -> Instant 15!
+      // B. Check if right tip is filled (100% capacity) -> Guaranteed 15
       let rightTipFilled = false;
       for (let dy of vOffsets) {
         const [r, g, b] = ctx.getImageData(endX - 3, yCenter + dy, 1, 1).data;
@@ -310,7 +339,7 @@ export default function App() {
         return 15;
       }
 
-      // C. Count filled pixels from left to right (0 - 14)
+      // C. Count filled pixels (0 - 14)
       let filledPixels = 0;
       for (let x = startX; x <= endX; x++) {
         let isFilled = false;
@@ -345,8 +374,6 @@ export default function App() {
 
   // --- MOVESET EXTRACTOR (SUPPORTS WEATHER BONUS & 2 CHARGED ATTACKS) ---
   const extractMovesFromCanvas = async (worker, canvas) => {
-    // Crop strictly the left half (X: 10% to 65%) where move names live,
-    // avoiding the energy bars and damage numbers on the right
     const cropX = Math.round(canvas.width * 0.10);
     const cropW = Math.round(canvas.width * 0.55);
     const cropY = Math.round(canvas.height * 0.50);
@@ -435,12 +462,12 @@ export default function App() {
         loadedScreens.push({ canvas, dataUrl, isAppraisal });
       }
 
-      // Guarantee Appraisal screen runs FIRST (isAppraisal = true first)
+      // Guarantee Appraisal screen runs FIRST
       loadedScreens.sort((a, b) => (b.isAppraisal ? 1 : 0) - (a.isAppraisal ? 1 : 0));
 
       const worker = await createWorker('eng');
 
-      // Only inherit activeRecord if the user explicitly clicked "+ Attach Moveset Pic" inside an open modal
+      // Only inherit activeRecord if explicitly attaching moveset to an existing open modal
       const isAttachingMoveset = isModalOpen && activeRecord && loadedScreens.length === 1 && !loadedScreens[0].isAppraisal;
 
       let current = isAttachingMoveset ? { ...activeRecord } : {
@@ -496,7 +523,7 @@ export default function App() {
           const nameRes = await worker.recognize(nameCanvas);
           const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
 
-          // Debug preview crop
+          // Debug preview crop (anchored to detected bars)
           if (ivs.debugCardBox) {
             const box = ivs.debugCardBox;
             const debugCanvas = document.createElement('canvas');
