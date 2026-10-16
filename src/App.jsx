@@ -367,10 +367,10 @@ const checkIfAppraisalScreen = (canvas) => {
     const yStart = Math.round(H * 0.72);
     const yEnd = Math.round(H * 0.88);
 
-    // Multi-column sampling to avoid hitting white segment dividers
-    const probeXs = [Math.round(W * 0.20), Math.round(W * 0.28), Math.round(W * 0.36)];
-    
+    // Multi-column sampling to locate the 3 bar lines
+    const probeXs = [Math.round(W * 0.20), Math.round(W * 0.26), Math.round(W * 0.32)];
     let barRowCandidates = [];
+
     for (const px of probeXs) {
       const candidates = [];
       let inBar = false;
@@ -405,7 +405,6 @@ const checkIfAppraisalScreen = (canvas) => {
     } else if (barRowCandidates.length > 3) {
       barCenters = barRowCandidates.slice(-3);
     } else {
-      // Calibrated baseline fallback
       barCenters = [
         Math.round(H * 0.755),
         Math.round(H * 0.798),
@@ -413,42 +412,62 @@ const checkIfAppraisalScreen = (canvas) => {
       ];
     }
 
-    const ivs = barCenters.map((yCenter) => {
-      let filledPixels = 0;
-      let coralRedPixels = 0;
-      const offsets = [-3, -1, 0, 1, 3];
+    const isRedPixel = (r, g, b) => {
+      // Direct RGB check for Pokémon GO's maxed coral-red bar (#E8535A)
+      return (r > 185 && g < 125 && b < 140 && (r - g > 60));
+    };
 
+    const isColoredBarPixel = (r, g, b) => {
+      const [h, s, l] = rgbToHsl(r, g, b);
+      // Red or Orange bar fill
+      const isOrange = (h >= 14 && h <= 55 && s >= 28 && l >= 25 && l <= 85);
+      const isRed = isRedPixel(r, g, b) || (((h >= 335 || h <= 18) && s >= 20 && l >= 28 && l <= 85 && r > g + 18));
+      return isOrange || isRed;
+    };
+
+    const ivs = barCenters.map((yCenter) => {
+      const offsets = [-3, -2, -1, 0, 1, 2, 3];
+      
+      // 1. FAST-PATH: Check if the bar is RED anywhere -> Instantly 15!
+      let hasRed = false;
+      for (let x = startX; x <= endX; x += 3) {
+        for (let dy of offsets) {
+          const [r, g, b] = ctx.getImageData(x, yCenter + dy, 1, 1).data;
+          if (isRedPixel(r, g, b)) {
+            hasRed = true;
+            break;
+          }
+        }
+        if (hasRed) return 15;
+      }
+
+      // 2. FAST-PATH: Check if the far-right end (100% mark) is filled -> Instantly 15!
+      let rightTipFilled = false;
+      for (let dy of offsets) {
+        const [r, g, b] = ctx.getImageData(endX - 2, yCenter + dy, 1, 1).data;
+        if (isColoredBarPixel(r, g, b)) {
+          rightTipFilled = true;
+          break;
+        }
+      }
+      if (rightTipFilled) return 15;
+
+      // 3. For 0 - 14: Count filled orange pixels from left to right
+      let filledPixels = 0;
       for (let x = startX; x <= endX; x++) {
         let isFilled = false;
-        let isRed = false;
-
         for (let dy of offsets) {
-          const pixel = ctx.getImageData(x, yCenter + dy, 1, 1).data;
-          const [r, g, b] = [pixel[0], pixel[1], pixel[2]];
-          const [h, s, l] = rgbToHsl(r, g, b);
-
-          const isOrange = (h >= 14 && h <= 55 && s >= 28 && l >= 25 && l <= 85);
-          const isCoralRed = ((h >= 335 || h <= 18) && s >= 20 && l >= 28 && l <= 85 && r > g + 18);
-
-          if (isCoralRed) {
-            isRed = true;
-            isFilled = true;
-            break;
-          } else if (isOrange) {
+          const [r, g, b] = ctx.getImageData(x, yCenter + dy, 1, 1).data;
+          if (isColoredBarPixel(r, g, b)) {
             isFilled = true;
             break;
           }
         }
         if (isFilled) filledPixels++;
-        if (isRed) coralRedPixels++;
-      }
-
-      if (coralRedPixels > totalBarWidth * 0.38) {
-        return 15;
       }
 
       const ratio = Math.min(1, Math.max(0, filledPixels / totalBarWidth));
-      return Math.min(15, Math.max(0, Math.round(ratio * 15)));
+      return Math.min(14, Math.max(0, Math.round(ratio * 15)));
     });
 
     const cropTop = barCenters[0] - Math.round(H * 0.030);
@@ -465,6 +484,7 @@ const checkIfAppraisalScreen = (canvas) => {
       }
     };
   };
+  
 const extractMovesFromCanvas = async (worker, canvas) => {
     // 1. Crop moves section (capturing Fast Attack and Charged Attacks cleanly)
     const mY = Math.round(canvas.height * 0.48);
@@ -593,7 +613,10 @@ const extractMovesFromCanvas = async (worker, canvas) => {
       // 3. Guarantee Appraisal screens are processed FIRST (isAppraisal = true first)
       parsedImages.sort((a, b) => (b.isAppraisal ? 1 : 0) - (a.isAppraisal ? 1 : 0));
 
-      let current = activeRecord ? { ...activeRecord } : {
+      // Only keep activeRecord if the user explicitly clicked "Attach Moveset Pic" inside an open modal
+      const isAttachingMoveset = isModalOpen && activeRecord && fileList.length === 1 && !parsedImages[0].isAppraisal;
+
+      let current = isAttachingMoveset ? { ...activeRecord } : {
         id: 'poke_' + Date.now(),
         name: '',
         cp: 0,
