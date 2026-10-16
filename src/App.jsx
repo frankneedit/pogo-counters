@@ -246,30 +246,46 @@ export default function App() {
     const endX = Math.round(W * 0.458);
     const totalBarWidth = endX - startX;
 
-    // Scan column at 26% width between 71% and 88% height
-    // Inside the white card, transitions from card white -> bar track -> card white
-    // pinpoints the exact center of each of the 3 stat bars
-    const scanX = Math.round(W * 0.26);
-    const ySearchStart = Math.round(H * 0.71);
-    const ySearchEnd = Math.round(H * 0.88);
+    // 1. Locate the top boundary of the WHITE appraisal card.
+    // Inside the white card, the background is pure white (all channels >= 240).
+    const probeX = Math.round(W * 0.28);
+    let cardTopY = -1;
 
+    for (let y = Math.round(H * 0.70); y <= Math.round(H * 0.82); y++) {
+      const [r, g, b] = ctx.getImageData(probeX, y, 1, 1).data;
+      if (r >= 240 && g >= 240 && b >= 240) {
+        // Confirm it's solid card white by checking 6px deeper
+        const [r2, g2, b2] = ctx.getImageData(probeX, y + 6, 1, 1).data;
+        if (r2 >= 240 && g2 >= 240 && b2 >= 240) {
+          cardTopY = y;
+          break;
+        }
+      }
+    }
+
+    if (cardTopY === -1) {
+      cardTopY = Math.round(H * 0.745);
+    }
+
+    // 2. Scan strictly INSIDE the white card (from cardTopY + 12px downwards)
+    // to detect the 3 dark/colored bar lines
     const detectedRows = [];
     let inBar = false;
     let barStartY = 0;
+    const yScanEnd = Math.min(Math.round(H * 0.90), cardTopY + Math.round(H * 0.16));
 
-    for (let y = ySearchStart; y <= ySearchEnd; y++) {
-      const [r, g, b] = ctx.getImageData(scanX, y, 1, 1).data;
-      // The card background is pure white (#FFFFFF, > 238 on all channels)
-      const isCardWhite = (r >= 238 && g >= 238 && b >= 238);
+    for (let y = cardTopY + 12; y <= yScanEnd; y++) {
+      const [r, g, b] = ctx.getImageData(probeX, y, 1, 1).data;
+      const isWhite = (r >= 235 && g >= 235 && b >= 235);
 
-      if (!isCardWhite && !inBar) {
+      if (!isWhite && !inBar) {
         inBar = true;
         barStartY = y;
-      } else if (isCardWhite && inBar) {
+      } else if (isWhite && inBar) {
         inBar = false;
         const thickness = y - barStartY;
-        // Each IV bar line is between 4px and 24px thick
-        if (thickness >= 4 && thickness <= 24) {
+        // Legitimate IV bar thickness is between 4px and 22px
+        if (thickness >= 4 && thickness <= 22) {
           detectedRows.push(Math.round((barStartY + y) / 2));
         }
       }
@@ -279,19 +295,18 @@ export default function App() {
     if (detectedRows.length === 3) {
       barCenters = detectedRows;
     } else if (detectedRows.length > 3) {
-      // Pick the 3 rows with consistent ~25-35px spacing
-      barCenters = detectedRows.slice(-3);
+      // If any extra row was caught, take the 3 closest to standard spacing (~35px)
+      barCenters = detectedRows.slice(0, 3);
     } else {
-      // Hard fallback if card detection was obscured
+      // Standard geometry relative to cardTopY across all mobile aspect ratios
       barCenters = [
-        Math.round(H * 0.755),
-        Math.round(H * 0.798),
-        Math.round(H * 0.840)
+        cardTopY + Math.round(H * 0.038), // Attack bar
+        cardTopY + Math.round(H * 0.081), // Defense bar
+        cardTopY + Math.round(H * 0.124)  // HP bar
       ];
     }
 
     const isCoralRed = (r, g, b) => {
-      // Pokémon GO maxed 15-bar coral red (#e8535a)
       return (r > 185 && g < 130 && b < 140 && (r - g > 45));
     };
 
@@ -304,7 +319,7 @@ export default function App() {
     const ivs = barCenters.map((yCenter) => {
       const vOffsets = [-5, -3, -1, 0, 1, 3, 5];
 
-      // A. Check for coral red -> Guaranteed 15
+      // A. Coral Red -> Guaranteed 15
       let redCount = 0;
       for (let x = startX; x <= endX; x += 2) {
         for (let dy of vOffsets) {
@@ -319,7 +334,7 @@ export default function App() {
         return 15;
       }
 
-      // B. Check if right tip is filled (100% capacity) -> Guaranteed 15
+      // B. Filled Right Tip -> Guaranteed 15
       let rightTipFilled = false;
       for (let dy of vOffsets) {
         const [r, g, b] = ctx.getImageData(endX - 3, yCenter + dy, 1, 1).data;
@@ -350,17 +365,15 @@ export default function App() {
       return Math.min(14, Math.max(0, Math.round(ratio * 15)));
     });
 
-    const cropTop = barCenters[0] - Math.round(H * 0.035);
-
     return {
       atk: ivs[0] ?? 0,
       def: ivs[1] ?? 0,
       hp: ivs[2] ?? 0,
       debugCardBox: {
         x: Math.round(W * 0.07),
-        y: cropTop,
+        y: cardTopY,
         w: Math.round(W * 0.44),
-        h: Math.round(H * 0.15)
+        h: Math.round(H * 0.16)
       }
     };
   };
