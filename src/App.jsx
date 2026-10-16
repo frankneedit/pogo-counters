@@ -343,6 +343,71 @@ export default function App() {
     };
   };
 
+  const extractMovesFromCanvas = async (worker, canvas) => {
+    // Crop the move names column (X: 10% to 65%, Y: 50% to 90%)
+    const cropX = Math.round(canvas.width * 0.10);
+    const cropW = Math.round(canvas.width * 0.55);
+    const cropY = Math.round(canvas.height * 0.50);
+    const cropH = Math.round(canvas.height * 0.40);
+
+    const moveCanvas = document.createElement('canvas');
+    moveCanvas.width = cropW;
+    moveCanvas.height = cropH;
+    moveCanvas.getContext('2d').drawImage(
+      canvas,
+      cropX, cropY, cropW, cropH,
+      0, 0, cropW, cropH
+    );
+
+    const moveRes = await worker.recognize(moveCanvas);
+    const rawLines = (moveRes.data.text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+
+    const candidates = [];
+    for (let line of rawLines) {
+      const up = line.toUpperCase();
+      if (
+        line.length < 3 ||
+        up.includes('GYMS') ||
+        up.includes('RAIDS') ||
+        up.includes('TRAINER') ||
+        up.includes('POWER UP') ||
+        up.includes('MEGA') ||
+        up.includes('EVOLVE') ||
+        up.includes('WEATHER') ||
+        up.includes('BONUS') ||
+        up.includes('MAX') ||
+        up.includes('STARDUST') ||
+        up.includes('CANDY') ||
+        up.includes('WEIGHT') ||
+        up.includes('HEIGHT')
+      ) {
+        continue;
+      }
+
+      const cleaned = line
+        .replace(/NEW ATTACK/gi, '')
+        .replace(/\d+/g, '')
+        .replace(/[^a-zA-Z\s]/g, '')
+        .trim();
+      if (cleaned.length >= 3) {
+        candidates.push(cleaned);
+      }
+    }
+
+    const recognizedMoves = [];
+    for (let c of candidates) {
+      const matched = matchNearestMove(c);
+      if (matched && !recognizedMoves.includes(matched)) {
+        recognizedMoves.push(matched);
+      }
+    }
+
+    return {
+      fast: recognizedMoves[0] || '',
+      charged: recognizedMoves.slice(1).join(' / ')
+    };
+  };
+  
   // --- SAFE FILE PIPELINE WITH AUTO-SORT ---
   const handleFilesSelected = async (fileList) => {
     if (!fileList || fileList.length === 0) return;
