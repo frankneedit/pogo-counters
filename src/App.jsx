@@ -316,46 +316,64 @@ export default function App() {
   };
 
   // 1. In analyzeIVBars: shifted slightly upward to center Attack, Defense, and HP
-  const analyzeIVBars = (canvas) => {
+ const analyzeIVBars = (canvas) => {
     const ctx = canvas.getContext('2d');
     const W = canvas.width;
     const H = canvas.height;
 
-    // 1. Locate the top edge of the white appraisal card:
-    // Probe inside the card's guaranteed horizontal region (X = 25% W)
-    // Scan downwards from 68% to 78% height until hitting the pure white card background (> 242)
-    let cardTop = -1;
-    const probeX = Math.round(W * 0.25);
-    for (let y = Math.round(H * 0.68); y <= Math.round(H * 0.80); y++) {
-      const p = ctx.getImageData(probeX, y, 1, 1).data;
-      if (p[0] >= 242 && p[1] >= 242 && p[2] >= 242) {
-        cardTop = y;
-        break;
-      }
-    }
-
-    if (cardTop === -1) {
-      cardTop = Math.round(H * 0.742);
-    }
-
-    // 2. Bar horizontal bounds
+    // 1. Horizontal bar bounds
     const startX = Math.round(W * 0.118);
     const endX = Math.round(W * 0.456);
     const totalBarWidth = endX - startX;
 
-    // 3. Exact bar center line offsets relative to cardTop
-    // Verified across all screen ratios:
-    const barOffsets = [
-      Math.round(H * 0.038), // Attack bar center
-      Math.round(H * 0.082), // Defense bar center
-      Math.round(H * 0.126)  // HP bar center
-    ];
+    // 2. Sample down a vertical line passing through the middle of the bars (28% of width)
+    const probeX = Math.round(W * 0.28);
+    const yStart = Math.round(H * 0.72);
+    const yEnd = Math.round(H * 0.88);
 
-    const ivs = barOffsets.map((offsetY) => {
-      const yCenter = cardTop + offsetY;
+    // Find the vertical center of the 3 bars by detecting non-white pixels
+    const barRowCandidates = [];
+    let inBar = false;
+    let barStartY = 0;
+
+    for (let y = yStart; y <= yEnd; y++) {
+      const p = ctx.getImageData(probeX, y, 1, 1).data;
+      const isCardWhite = (p[0] > 230 && p[1] > 230 && p[2] > 230);
+
+      if (!isCardWhite && !inBar) {
+        inBar = true;
+        barStartY = y;
+      } else if (isCardWhite && inBar) {
+        inBar = false;
+        const barHeight = y - barStartY;
+        // The three IV bars are typically 6-18px thick
+        if (barHeight >= 4 && barHeight <= 24) {
+          barRowCandidates.push(Math.round((barStartY + y) / 2));
+        }
+      }
+    }
+
+    // If 3 bars were detected cleanly, use their exact centers.
+    // Otherwise fallback to calibrated screen proportions.
+    let barCenters = [];
+    if (barRowCandidates.length === 3) {
+      barCenters = barRowCandidates;
+    } else if (barRowCandidates.length > 3) {
+      // Pick the last 3 detected bars (closest to bottom)
+      barCenters = barRowCandidates.slice(-3);
+    } else {
+      // Fallback
+      barCenters = [
+        Math.round(H * 0.778),
+        Math.round(H * 0.816),
+        Math.round(H * 0.854)
+      ];
+    }
+
+    const ivs = barCenters.map((yCenter) => {
       let filledPixels = 0;
       let coralRedPixels = 0;
-      const offsets = [-3, -2, 0, 2, 3];
+      const offsets = [-2, 0, 2];
 
       for (let x = startX; x <= endX; x++) {
         let isFilled = false;
@@ -366,10 +384,8 @@ export default function App() {
           const [r, g, b] = [pixel[0], pixel[1], pixel[2]];
           const [h, s, l] = rgbToHsl(r, g, b);
 
-          // In-game orange fill
           const isOrange = (h >= 14 && h <= 55 && s >= 28 && l >= 25 && l <= 85);
-          // In-game coral red fill (max 15 bar)
-          const isCoralRed = ((h >= 335 || h <= 15) && s >= 22 && l >= 28 && l <= 85 && r > g + 18);
+          const isCoralRed = ((h >= 335 || h <= 18) && s >= 20 && l >= 28 && l <= 85 && r > g + 18);
 
           if (isCoralRed) {
             isRed = true;
@@ -392,19 +408,20 @@ export default function App() {
       return Math.min(15, Math.max(0, Math.round(ratio * 15)));
     });
 
+    const cropTop = barCenters[0] - Math.round(H * 0.035);
+
     return {
       atk: ivs[0] ?? 0,
       def: ivs[1] ?? 0,
       hp: ivs[2] ?? 0,
       debugCardBox: {
-        x: Math.round(W * 0.08),
-        y: cardTop,
+        x: Math.round(W * 0.07),
+        y: cropTop,
         w: Math.round(W * 0.44),
-        h: Math.round(H * 0.15)
+        h: Math.round(H * 0.14)
       }
     };
   };
-
 const extractMovesFromCanvas = async (worker, canvas) => {
     const mY = Math.round(canvas.height * 0.50);
     const mW = Math.round(canvas.width * 0.90);
