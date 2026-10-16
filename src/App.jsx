@@ -407,7 +407,7 @@ export default function App() {
 
     return {
       fast: validMoveLines[0] ? matchNearestMove(validMoveLines[0]) : '',
-      charged: validMoveLines[1] ? matchNearestMove(validMoveLines[1]) : ''
+      charged: validMoveLines.slice(1).map(matchNearestMove).filter(Boolean).join(' / ')
     };
   };
 
