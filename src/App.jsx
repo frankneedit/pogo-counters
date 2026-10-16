@@ -1,34 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Upload, Search, Shield, Zap, Sparkles, Trash2, 
-  RefreshCw, X, Layers, Image as ImageIcon, Download, UploadCloud, Plus
+  RefreshCw, X, Layers, Image as ImageIcon, Download, UploadCloud, 
+  Plus, Award, ChevronRight
 } from 'lucide-react';
 import { createWorker } from 'tesseract.js';
 import { supabase } from './supabase';
+import { TYPE_STYLES } from './utils/pokemonStrategy';
+import AnalysisModal from './components/AnalysisModal';
 
-// Official Pokémon type pill colors in Tailwind
-const TYPE_STYLES = {
-  Normal: "bg-stone-500/20 text-stone-300 border-stone-500/40",
-  Fire: "bg-orange-500/20 text-orange-400 border-orange-500/40",
-  Water: "bg-blue-500/20 text-blue-400 border-blue-500/40",
-  Grass: "bg-emerald-500/20 text-emerald-400 border-emerald-500/40",
-  Electric: "bg-yellow-500/20 text-yellow-300 border-yellow-500/40",
-  Ice: "bg-cyan-400/20 text-cyan-300 border-cyan-400/40",
-  Fighting: "bg-red-700/20 text-red-400 border-red-700/40",
-  Poison: "bg-purple-600/20 text-purple-300 border-purple-600/40",
-  Ground: "bg-amber-700/20 text-amber-300 border-amber-700/40",
-  Flying: "bg-indigo-400/20 text-indigo-300 border-indigo-400/40",
-  Psychic: "bg-pink-500/20 text-pink-300 border-pink-500/40",
-  Bug: "bg-lime-600/20 text-lime-400 border-lime-600/40",
-  Rock: "bg-stone-600/20 text-stone-300 border-stone-600/40",
-  Ghost: "bg-violet-800/20 text-violet-300 border-violet-800/40",
-  Dragon: "bg-indigo-700/20 text-indigo-300 border-indigo-700/40",
-  Steel: "bg-slate-400/20 text-slate-300 border-slate-400/40",
-  Fairy: "bg-rose-400/20 text-rose-300 border-rose-400/40",
-  Dark: "bg-neutral-800 text-neutral-300 border-neutral-700"
-};
-
-// In-memory / localStorage cache so each Pokémon is queried once
 const typeCache = JSON.parse(localStorage.getItem('poke_type_cache') || '{}');
 
 const fetchPokemonTypesOnline = async (speciesName) => {
@@ -51,7 +31,6 @@ const fetchPokemonTypesOnline = async (speciesName) => {
   }
 };
 
-// Known moves dictionary for fuzzy matching
 const KNOWN_MOVES = [
   "Mud Shot", "Metal Claw", "Dragon Tail", "Dragon Breath", "Counter", 
   "Shadow Claw", "Vine Whip", "Razor Leaf", "Water Gun", "Waterfall",
@@ -59,8 +38,10 @@ const KNOWN_MOVES = [
   "Bite", "Lick", "Psycho Cut", "Confusion", "Lock-On", "Thunder Shock",
   "Volt Switch", "Spark", "Poison Jab", "Hex", "Air Slash", "Wing Attack",
   "Gust", "Ice Shard", "Powder Snow", "Smack Down", "Rock Throw", "Mud-Slap",
-  "Earthquake", "Draco Meteor", "Precipice Blades", "Roar of Time", "Iron Head",
-  "Hydro Cannon", "Surf", "Origin Pulse", "Blast Burn", "Overheat",
+  
+  // Charged Moves
+  "Earth Power", "Earthquake", "Draco Meteor", "Precipice Blades", "Roar of Time", "Iron Head",
+  "Outrage", "Sand Tomb", "Hydro Cannon", "Surf", "Origin Pulse", "Blast Burn", "Overheat",
   "Fire Blast", "Frenzy Plant", "Solar Beam", "Energy Ball", "Grass Knot",
   "Wild Charge", "Thunderbolt", "Thunder", "Zap Cannon", "Close Combat",
   "Dynamic Punch", "Aura Sphere", "Superpower", "Cross Chop", "Shadow Ball",
@@ -69,7 +50,6 @@ const KNOWN_MOVES = [
   "Stone Edge", "Rock Slide", "Sludge Bomb", "Sludge Wave", "Gunk Shot",
   "Brave Bird", "Sky Attack", "Hurricane", "Fly", "Aeroblast", "Sacred Fire"
 ];
-
 const getSimilarity = (s1, s2) => {
   const str1 = s1.toLowerCase().trim();
   const str2 = s2.toLowerCase().trim();
@@ -112,7 +92,6 @@ const matchNearestMove = (rawOcrText) => {
   return highestScore >= 0.55 ? bestMatch : cleaned;
 };
 
-// Supabase CRUD Helpers
 const getAllRecords = async () => {
   const { data, error } = await supabase
     .from('pokemon_records')
@@ -174,6 +153,7 @@ export default function App() {
   const [statusMsg, setStatusMsg] = useState('');
   const [activeRecord, setActiveRecord] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [detailsRecord, setDetailsRecord] = useState(null);
   const [inspectedImage, setInspectedImage] = useState(null);
   const [debugCropUrl, setDebugCropUrl] = useState(null);
 
@@ -237,22 +217,23 @@ export default function App() {
     const ivs = barYPercentages.map((yPct) => {
       const yCenter = Math.round(H * yPct);
       let filledPixels = 0;
-      let hasMaxRed = false;
+      let redCount = 0;
       const offsets = [-3, -1, 0, 1, 3];
 
       for (let x = startX; x <= endX; x++) {
         let isFilled = false;
+        let isRed = false;
+
         for (let dy of offsets) {
           const pixel = ctx.getImageData(x, yCenter + dy, 1, 1).data;
           const [r, g, b] = [pixel[0], pixel[1], pixel[2]];
           const [h, s, l] = rgbToHsl(r, g, b);
 
           const isOrange = (h >= 16 && h <= 55 && s >= 30 && l >= 25 && l <= 80);
-          const isCoralRedByRGB = (r > 175 && r > g + 30 && r > b + 30 && l <= 85);
-          const isCoralRedByHSL = ((h >= 335 || h <= 20) && s >= 25 && l >= 30 && l <= 82);
+          const isCoralRed = (r > 195 && g < 110 && b < 130 && s >= 40);
 
-          if (isCoralRedByRGB || isCoralRedByHSL) {
-            hasMaxRed = true;
+          if (isCoralRed) {
+            isRed = true;
             isFilled = true;
             break;
           } else if (isOrange) {
@@ -261,9 +242,11 @@ export default function App() {
           }
         }
         if (isFilled) filledPixels++;
+        if (isRed) redCount++;
       }
 
-      if (hasMaxRed && filledPixels >= totalBarWidth * 0.88) {
+      // Only count as 15 if a dominant portion of the filled pixels is true coral red
+      if (redCount > totalBarWidth * 0.45) {
         return 15;
       }
 
@@ -277,7 +260,6 @@ export default function App() {
       hp: ivs[2] ?? 0
     };
   };
-
   const extractMovesFromCanvas = async (worker, canvas) => {
     const mW = Math.round(canvas.width * 0.88);
     const mH = Math.round(canvas.height * 0.35);
@@ -313,7 +295,10 @@ export default function App() {
           !up.includes('POWER') &&
           !up.includes('NEW ATTACK') &&
           !up.includes('PRIMAL') &&
-          !up.includes('REVERSION')
+          !up.includes('REVERSION') &&
+          !up.includes('OBTAINED') &&
+          !up.includes('TRADE') &&
+          !up.includes('CAUGHT')
         );
       });
 
@@ -345,7 +330,7 @@ export default function App() {
         const canvas = document.createElement('canvas');
         canvas.width = img.width;
         canvas.height = img.height;
-        ctxDraw(canvas, img);
+        canvas.getContext('2d').drawImage(img, 0, 0);
 
         const isAppraisal = checkIfAppraisal(canvas);
         loadedScreens.push({ canvas, dataUrl, isAppraisal });
@@ -378,7 +363,6 @@ export default function App() {
           setStatusMsg(`Analyzing Appraisal Screen (${i + 1}/${loadedScreens.length})...`);
           const ivs = analyzeIVBars(canvas);
 
-          // CP Crop
           const cpW = Math.round(canvas.width * 0.45);
           const cpH = Math.round(canvas.height * 0.08);
           const cpCanvas = document.createElement('canvas');
@@ -393,7 +377,6 @@ export default function App() {
           const cpRes = await worker.recognize(cpCanvas);
           const cpMatch = cpRes.data.text.match(/\d{3,4}/);
 
-          // Name Crop
           const nW = Math.round(canvas.width * 0.6);
           const nH = Math.round(canvas.height * 0.06);
           const nameCanvas = document.createElement('canvas');
@@ -408,7 +391,6 @@ export default function App() {
           const nameRes = await worker.recognize(nameCanvas);
           const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
 
-          // Debug visual crop
           const dW = Math.round(canvas.width * 0.40);
           const dH = Math.round(canvas.height * 0.14);
           const debugCanvas = document.createElement('canvas');
@@ -461,10 +443,6 @@ export default function App() {
       setIsProcessing(false);
       setStatusMsg('');
     }
-  };
-
-  const ctxDraw = (c, img) => {
-    c.getContext('2d').drawImage(img, 0, 0);
   };
 
   const handleSaveModal = async () => {
@@ -691,22 +669,34 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
-                <div className="flex flex-wrap gap-1">
-                  {item.tags && item.tags.map(t => (
-                    <span key={t} className="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-slate-300">
-                      {t}
-                    </span>
-                  ))}
+              <div className="mt-4 pt-3 border-t border-slate-800 flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap gap-1">
+                    {item.tags && item.tags.map(t => (
+                      <span key={t} className="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-slate-300">
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                  {item.screenshot && (
+                    <button
+                      onClick={() => setInspectedImage(item.screenshot)}
+                      className="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1 font-medium"
+                    >
+                      <ImageIcon className="w-3 h-3" /> Pic
+                    </button>
+                  )}
                 </div>
-                {item.screenshot && (
-                  <button
-                    onClick={() => setInspectedImage(item.screenshot)}
-                    className="text-xs text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-medium"
-                  >
-                    <ImageIcon className="w-3 h-3" /> View Pic
-                  </button>
-                )}
+
+                {/* Open Analysis Modal */}
+                <button
+                  onClick={() => setDetailsRecord(item)}
+                  className="w-full mt-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700/80 text-xs font-semibold text-cyan-400 border border-slate-700 transition-all active:scale-[0.98]"
+                >
+                  <Award className="w-3.5 h-3.5" />
+                  <span>View Analysis & Strategy</span>
+                  <ChevronRight className="w-3 h-3 ml-auto text-slate-500" />
+                </button>
               </div>
             </div>
           ))}
@@ -720,6 +710,13 @@ export default function App() {
         </div>
       </main>
 
+      {/* SEPARATE MODAL COMPONENT */}
+      <AnalysisModal 
+        pokemon={detailsRecord} 
+        onClose={() => setDetailsRecord(null)} 
+      />
+
+      {/* VERIFY / EDIT MODAL */}
       {isModalOpen && activeRecord && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
