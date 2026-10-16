@@ -47,7 +47,8 @@ const FALLBACK_MOVES = [
   "Crunch", "Psychic", "Psyshock", "Moonblast", "Play Rough", "Dazzling Gleam", 
   "Ice Beam", "Blizzard", "Avalanche", "Stone Edge", "Rock Slide", 
   "Sludge Bomb", "Sludge Wave", "Gunk Shot", "Brave Bird", "Sky Attack", 
-  "Hurricane", "Fly", "Aeroblast", "Sacred Fire"
+  "Hurricane", "Fly", "Aeroblast", "Sacred Fire",
+"Body Slam", "Zen Headbutt", "Lick", "Heavy Slam", "Superpower", "Hyper Beam"
 ];
 
 // In-memory master list (starts with cached or fallback, updates live)
@@ -320,41 +321,37 @@ export default function App() {
     const W = canvas.width;
     const H = canvas.height;
 
-    // 1. Locate the 3-Star Badge on the left (Supports both Gold and Pink Hundo badges)
-    let badgeBottomY = -1;
-    let badgeCenterX = Math.round(W * 0.14);
+    // 1. UNIVERSAL ANCHOR: Locate the top of the bottom speech bubble
+    // The speech bubble is solid white (RGB > 240) in the lower center (W * 0.50)
+    let bubbleTopY = -1;
+    const probeX = Math.round(W * 0.50);
 
-    for (let y = Math.round(H * 0.74); y >= Math.round(H * 0.58); y -= 2) {
-      const p = ctx.getImageData(badgeCenterX, y, 1, 1).data;
-      const [h, s, l] = rgbToHsl(p[0], p[1], p[2]);
-      
-      // Standard Gold badge OR Pink 100% IV Hundo badge
-      const isGoldBadge = (h >= 24 && h <= 50 && s >= 35 && l >= 35 && l <= 85);
-      const isPinkHundoBadge = ((h >= 335 || h <= 15) && s >= 30 && l >= 45 && l <= 85);
-
-      if (isGoldBadge || isPinkHundoBadge) {
-        badgeBottomY = y;
+    for (let y = Math.round(H * 0.88); y >= Math.round(H * 0.76); y -= 2) {
+      const p = ctx.getImageData(probeX, y, 1, 1).data;
+      // When leaving the white speech bubble into darker leader jacket / background
+      if (p[0] < 220 || p[1] < 220 || p[2] < 220) {
+        bubbleTopY = y;
         break;
       }
     }
 
-    // Anchor white appraisal box top edge
-    const cardTop = badgeBottomY !== -1 
-      ? badgeBottomY + Math.round(H * 0.015) 
-      : Math.round(H * 0.745);
+    // Baseline fallback if speech bubble wasn't detected
+    if (bubbleTopY === -1) {
+      bubbleTopY = Math.round(H * 0.89);
+    }
+
+    // In Pokémon GO UI, the 3 bars sit at fixed distances above the speech bubble
+    const hpCenterY = bubbleTopY - Math.round(H * 0.045);
+    const defCenterY = bubbleTopY - Math.round(H * 0.088);
+    const atkCenterY = bubbleTopY - Math.round(H * 0.130);
+
+    const barCenters = [atkCenterY, defCenterY, hpCenterY];
 
     const startX = Math.round(W * 0.118);
     const endX = Math.round(W * 0.456);
     const totalBarWidth = endX - startX;
 
-    const barOffsets = [
-      Math.round(H * 0.042), // Attack bar
-      Math.round(H * 0.086), // Defense bar
-      Math.round(H * 0.128)  // HP bar
-    ];
-
-    const ivs = barOffsets.map((offsetY) => {
-      const yCenter = cardTop + offsetY;
+    const ivs = barCenters.map((yCenter) => {
       let filledPixels = 0;
       let coralRedPixels = 0;
       const offsets = [-3, -1, 0, 1, 3];
@@ -368,8 +365,10 @@ export default function App() {
           const [r, g, b] = [pixel[0], pixel[1], pixel[2]];
           const [h, s, l] = rgbToHsl(r, g, b);
 
-          const isOrange = (h >= 16 && h <= 55 && s >= 30 && l >= 25 && l <= 85);
-          const isCoralRed = ((h >= 335 || h <= 15) && s >= 25 && l >= 30 && l <= 85 && r > g + 20);
+          // Orange bar fill
+          const isOrange = (h >= 16 && h <= 55 && s >= 28 && l >= 25 && l <= 85);
+          // Maxed coral-pink/red fill (15)
+          const isCoralRed = ((h >= 335 || h <= 15) && s >= 22 && l >= 30 && l <= 85 && r > g + 18);
 
           if (isCoralRed) {
             isRed = true;
@@ -384,6 +383,7 @@ export default function App() {
         if (isRed) coralRedPixels++;
       }
 
+      // If coral red dominates, it is max 15
       if (coralRedPixels > totalBarWidth * 0.40) {
         return 15;
       }
@@ -398,17 +398,17 @@ export default function App() {
       hp: ivs[2] ?? 0,
       debugCardBox: {
         x: Math.round(W * 0.06),
-        y: cardTop,
+        y: atkCenterY - Math.round(H * 0.025),
         w: Math.round(W * 0.45),
         h: Math.round(H * 0.16)
       }
     };
   };
 
- const extractMovesFromCanvas = async (worker, canvas) => {
-    const mY = Math.round(canvas.height * 0.52);
+const extractMovesFromCanvas = async (worker, canvas) => {
+    const mY = Math.round(canvas.height * 0.50);
     const mW = Math.round(canvas.width * 0.90);
-    const mH = Math.round(canvas.height * 0.40);
+    const mH = Math.round(canvas.height * 0.42);
 
     const moveCanvas = document.createElement('canvas');
     moveCanvas.width = mW;
@@ -423,7 +423,6 @@ export default function App() {
     const moveRes = await worker.recognize(moveCanvas);
     const rawLines = moveRes.data.lines.map(l => l.text.trim());
 
-    // 1. Locate GYMS & RAIDS
     let startIdx = rawLines.findIndex(t => {
       const up = t.toUpperCase();
       return up.includes('GYM') || up.includes('RAID') || up.includes('TRAINER');
@@ -431,7 +430,6 @@ export default function App() {
 
     const linesAfterTab = startIdx !== -1 ? rawLines.slice(startIdx + 1) : rawLines;
 
-    // 2. Filter lines strictly BEFORE "NEW ATTACK" or footer metadata
     const moveAreaLines = [];
     for (let line of linesAfterTab) {
       const up = line.toUpperCase();
@@ -445,7 +443,6 @@ export default function App() {
         break;
       }
 
-      // Ignore buttons, headings, and weather boost subtext
       if (
         line.length < 3 ||
         up.includes('GYM') ||
@@ -456,7 +453,7 @@ export default function App() {
         up.includes('POWER UP') ||
         up.includes('STARDUST') ||
         up.includes('CANDY') ||
-        up.includes('WEATHER') || // Ignores "WEATHER BONUS" lines
+        up.includes('WEATHER') ||
         up.includes('BONUS')
       ) {
         continue;
@@ -465,7 +462,6 @@ export default function App() {
       moveAreaLines.push(line);
     }
 
-    // 3. Match against official moves dictionary
     const recognizedMoves = [];
     for (let raw of moveAreaLines) {
       const matched = matchNearestMove(raw);
@@ -474,12 +470,9 @@ export default function App() {
       }
     }
 
-    const fast = recognizedMoves[0] || '';
-    const chargedList = recognizedMoves.slice(1);
-
     return {
-      fast: fast,
-      charged: chargedList.join(' / ')
+      fast: recognizedMoves[0] || '',
+      charged: recognizedMoves.slice(1).join(' / ')
     };
   };
 
