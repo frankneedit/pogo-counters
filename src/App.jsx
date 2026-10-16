@@ -246,100 +246,62 @@ export default function App() {
     const endX = Math.round(W * 0.458);
     const totalBarWidth = endX - startX;
 
+    // 1. Locate the top of the white card by scanning down at X = 20%
+    // At X = 20%, it transitions from the pink badge directly into the white card
+    const probeX = Math.round(W * 0.20);
+    let cardTopY = -1;
+
+    for (let y = Math.round(H * 0.70); y <= Math.round(H * 0.80); y++) {
+      const [r, g, b] = ctx.getImageData(probeX, y, 1, 1).data;
+      if (r >= 240 && g >= 240 && b >= 240) {
+        cardTopY = y;
+        break;
+      }
+    }
+
+    if (cardTopY === -1) {
+      cardTopY = Math.round(H * 0.745);
+    }
+
+    // 2. The height of the 3-bar area inside the card is ~14.5% of the total screen height
+    const cardAreaH = Math.round(H * 0.145);
+
+    // Exact vertical positions for Attack, Defense, HP inside that white card
+    const barCenters = [
+      cardTopY + Math.round(cardAreaH * 0.30), // Attack
+      cardTopY + Math.round(cardAreaH * 0.58), // Defense
+      cardTopY + Math.round(cardAreaH * 0.86)  // HP
+    ];
+
     const isCoralRed = (r, g, b) => {
-      return (r > 185 && g < 130 && b < 140 && (r - g > 45));
+      // Coral red maxed bar (#E8535A): strong red channel, low green, low blue
+      return (r > 175 && g < 135 && b < 145 && (r - g > 40));
     };
 
     const isBarColor = (r, g, b) => {
       const [h, s, l] = rgbToHsl(r, g, b);
-      const isOrange = (h >= 14 && h <= 55 && s >= 25 && l >= 25 && l <= 85);
+      const isOrange = (h >= 14 && h <= 55 && s >= 20 && l >= 25 && l <= 85);
       return isOrange || isCoralRed(r, g, b);
     };
 
-    // 1. Find the 3 bar Y-coordinates by horizontal pixel density.
-    // Each of the 3 stat bars spans horizontally from ~12% to >20% width.
-    // Empty tracks are dark gray (l < 45), filled tracks are orange/red.
-    const isTrackPixel = (r, g, b) => {
-      const [h, s, l] = rgbToHsl(r, g, b);
-      const isColored = isBarColor(r, g, b);
-      const isGrayTrack = (l >= 20 && l <= 55 && s <= 20); // Unfilled dark track
-      return isColored || isGrayTrack;
-    };
-
-    const yStart = Math.round(H * 0.73);
-    const yEnd = Math.round(H * 0.88);
-    const rowCounts = [];
-
-    // Probe 30 pixels along the first section of the bar track
-    const probeXStart = Math.round(W * 0.14);
-    const probeXEnd = Math.round(W * 0.28);
-
-    for (let y = yStart; y <= yEnd; y++) {
-      let count = 0;
-      for (let x = probeXStart; x <= probeXEnd; x += 2) {
-        const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
-        if (isTrackPixel(r, g, b)) {
-          count++;
-        }
-      }
-      rowCounts.push({ y, count });
-    }
-
-    // Find local peaks in rowCounts (representing the center of each bar)
-    const threshold = ((probeXEnd - probeXStart) / 2) * 0.55;
-    const peaks = [];
-    let inPeak = false;
-    let peakStartY = 0;
-
-    for (let i = 0; i < rowCounts.length; i++) {
-      const { y, count } = rowCounts[i];
-      if (count >= threshold && !inPeak) {
-        inPeak = true;
-        peakStartY = y;
-      } else if (count < threshold && inPeak) {
-        inPeak = false;
-        const thickness = y - peakStartY;
-        if (thickness >= 4 && thickness <= 24) {
-          peaks.push(Math.round((peakStartY + y) / 2));
-        }
-      }
-    }
-
-    let barCenters = [];
-    if (peaks.length === 3) {
-      barCenters = peaks;
-    } else if (peaks.length > 3) {
-      // Pick the 3 peaks with ~35px spacing
-      barCenters = peaks.slice(0, 3);
-    } else {
-      // Fallback
-      barCenters = [
-        Math.round(H * 0.772),
-        Math.round(H * 0.814),
-        Math.round(H * 0.856)
-      ];
-    }
-
-    // 2. Scan each of the 3 validated bar rows
     const ivs = barCenters.map((yCenter) => {
-      const vOffsets = [-5, -3, -1, 0, 1, 3, 5];
+      // Sample a wide vertical slice (±8px) so we never miss the bar even if it shifts
+      const vOffsets = [-8, -6, -4, -2, 0, 2, 4, 6, 8];
 
-      // A. Coral Red check -> 15
-      let redCount = 0;
-      for (let x = startX; x <= endX; x += 2) {
+      // A. Coral Red Detection -> Instantly 15!
+      let hasRed = false;
+      for (let x = startX; x <= endX; x += 3) {
         for (let dy of vOffsets) {
           const [r, g, b] = ctx.getImageData(x, yCenter + dy, 1, 1).data;
           if (isCoralRed(r, g, b)) {
-            redCount++;
+            hasRed = true;
             break;
           }
         }
-      }
-      if (redCount >= totalBarWidth * 0.15) {
-        return 15;
+        if (hasRed) return 15;
       }
 
-      // B. Filled Right Tip check -> 15
+      // B. Check if right tip is filled -> Instantly 15!
       let rightTipFilled = false;
       for (let dy of vOffsets) {
         const [r, g, b] = ctx.getImageData(endX - 3, yCenter + dy, 1, 1).data;
@@ -348,11 +310,9 @@ export default function App() {
           break;
         }
       }
-      if (rightTipFilled) {
-        return 15;
-      }
+      if (rightTipFilled) return 15;
 
-      // C. Count filled orange pixels (0 - 14)
+      // C. Count filled pixels for stats 0 - 14
       let filledPixels = 0;
       for (let x = startX; x <= endX; x++) {
         let isFilled = false;
@@ -370,79 +330,16 @@ export default function App() {
       return Math.min(14, Math.max(0, Math.round(ratio * 15)));
     });
 
-    const cropTop = barCenters[0] - Math.round(H * 0.035);
-
     return {
       atk: ivs[0] ?? 0,
       def: ivs[1] ?? 0,
       hp: ivs[2] ?? 0,
       debugCardBox: {
         x: Math.round(W * 0.07),
-        y: cropTop,
+        y: cardTopY,
         w: Math.round(W * 0.44),
-        h: Math.round(H * 0.16)
+        h: cardAreaH + Math.round(H * 0.02)
       }
-    };
-  };
-
-  // --- MOVESET EXTRACTOR (SUPPORTS WEATHER BONUS & 2 CHARGED ATTACKS) ---
-  const extractMovesFromCanvas = async (worker, canvas) => {
-    const cropX = Math.round(canvas.width * 0.10);
-    const cropW = Math.round(canvas.width * 0.55);
-    const cropY = Math.round(canvas.height * 0.50);
-    const cropH = Math.round(canvas.height * 0.40);
-
-    const moveCanvas = document.createElement('canvas');
-    moveCanvas.width = cropW;
-    moveCanvas.height = cropH;
-    moveCanvas.getContext('2d').drawImage(
-      canvas,
-      cropX, cropY, cropW, cropH,
-      0, 0, cropW, cropH
-    );
-
-    const moveRes = await worker.recognize(moveCanvas);
-    const rawLines = (moveRes.data.text || '').split('\n').map(l => l.trim()).filter(Boolean);
-
-    const candidates = [];
-    for (let line of rawLines) {
-      const up = line.toUpperCase();
-      if (
-        line.length < 3 ||
-        up.includes('GYMS') ||
-        up.includes('RAIDS') ||
-        up.includes('TRAINER') ||
-        up.includes('POWER UP') ||
-        up.includes('MEGA') ||
-        up.includes('EVOLVE') ||
-        up.includes('WEATHER') ||
-        up.includes('BONUS') ||
-        up.includes('MAX') ||
-        up.includes('STARDUST') ||
-        up.includes('CANDY') ||
-        up.includes('WEIGHT') ||
-        up.includes('HEIGHT')
-      ) {
-        continue;
-      }
-
-      const cleaned = line.replace(/NEW ATTACK/gi, '').replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim();
-      if (cleaned.length >= 3) {
-        candidates.push(cleaned);
-      }
-    }
-
-    const recognizedMoves = [];
-    for (let c of candidates) {
-      const matched = matchNearestMove(c);
-      if (matched && !recognizedMoves.includes(matched)) {
-        recognizedMoves.push(matched);
-      }
-    }
-
-    return {
-      fast: recognizedMoves[0] || '',
-      charged: recognizedMoves.slice(1).join(' / ')
     };
   };
 
