@@ -317,43 +317,52 @@ function rgbToHsl(r, g, b) {
     }
     return badgeGoldPixels > 35;
   };
-const checkIfAppraisalScreen = (canvas) => {
-    const ctx = canvas.getContext('2d');
-    const W = canvas.width;
-    const H = canvas.height;
 
-    // 1. Look for the green POWER UP button (Present ONLY on Moveset/Profile screen)
-    // The green button is centered around X: 15% - 45%, Y: 56% - 63%
-    let hasGreenPowerUpButton = false;
-    for (let x = Math.round(W * 0.15); x <= Math.round(W * 0.40); x += 10) {
-      for (let y = Math.round(H * 0.56); y <= Math.round(H * 0.64); y += 6) {
-        const p = ctx.getImageData(x, y, 1, 1).data;
-        const [h, s, l] = rgbToHsl(p[0], p[1], p[2]);
-        // Distinct Pokémon GO button green (Hue 120-165, Saturation > 35)
-        if (h >= 120 && h <= 170 && s >= 35 && l >= 35 && l <= 85) {
-          hasGreenPowerUpButton = true;
-          break;
-        }
-      }
-      if (hasGreenPowerUpButton) break;
+  const checkIfAppraisalScreen = async (worker, canvas) => {
+    // Crop the bottom 25% where the speech bubble or Power Up button sits
+    const bY = Math.round(canvas.height * 0.75);
+    const bH = Math.round(canvas.height * 0.24);
+    const bW = Math.round(canvas.width * 0.90);
+
+    const testCanvas = document.createElement('canvas');
+    testCanvas.width = bW;
+    testCanvas.height = bH;
+    testCanvas.getContext('2d').drawImage(
+      canvas,
+      Math.round(canvas.width * 0.05), bY, bW, bH,
+      0, 0, bW, bH
+    );
+
+    const res = await worker.recognize(testCanvas);
+    const text = (res.data.text || '').toUpperCase();
+
+    // Moveset/Profile screens ALWAYS have these words in the bottom third
+    if (
+      text.includes('POWER UP') || 
+      text.includes('GYM') || 
+      text.includes('RAID') || 
+      text.includes('TRAINER') || 
+      text.includes('NEW ATTACK')
+    ) {
+      return false;
     }
 
-    if (hasGreenPowerUpButton) {
-      return false; // Definitely a MOVESET / Profile screen!
+    // Appraisal screens ALWAYS have "caught", "hatched", "discovered", or leader appraisal dialogue
+    if (
+      text.includes('CAUGHT') || 
+      text.includes('AROUND') || 
+      text.includes('HATCHED') || 
+      text.includes('SINGAPORE') ||
+      text.includes('ATTACK') ||
+      text.includes('DEFENSE')
+    ) {
+      return true;
     }
 
-    // 2. Appraisal screen has the Leader's speech bubble at the bottom (solid white at 90% - 95% height)
-    let whiteBubbleCount = 0;
-    const probeX = Math.round(W * 0.50);
-    for (let y = Math.round(H * 0.90); y <= Math.round(H * 0.96); y += 2) {
-      const p = ctx.getImageData(probeX, y, 1, 1).data;
-      if (p[0] >= 240 && p[1] >= 240 && p[2] >= 240) {
-        whiteBubbleCount++;
-      }
-    }
-
-    return whiteBubbleCount >= 10;
+    // Fallback: If it has the speech bubble
+    return true;
   };
+  
   // 1. In analyzeIVBars: shifted slightly upward to center Attack, Defense, and HP
  const analyzeIVBars = (canvas) => {
     const ctx = canvas.getContext('2d');
@@ -364,38 +373,28 @@ const checkIfAppraisalScreen = (canvas) => {
     const endX = Math.round(W * 0.456);
     const totalBarWidth = endX - startX;
 
+    // Scan column at 25% width down the appraisal box to locate the 3 bar centers
+    const probeX = Math.round(W * 0.25);
     const yStart = Math.round(H * 0.72);
     const yEnd = Math.round(H * 0.88);
 
-    // Multi-column sampling to locate the 3 bar lines
-    const probeXs = [Math.round(W * 0.20), Math.round(W * 0.26), Math.round(W * 0.32)];
-    let barRowCandidates = [];
+    const barRowCandidates = [];
+    let inBar = false;
+    let barStartY = 0;
 
-    for (const px of probeXs) {
-      const candidates = [];
-      let inBar = false;
-      let barStartY = 0;
+    for (let y = yStart; y <= yEnd; y++) {
+      const p = ctx.getImageData(probeX, y, 1, 1).data;
+      const isCardWhite = (p[0] > 230 && p[1] > 230 && p[2] > 230);
 
-      for (let y = yStart; y <= yEnd; y++) {
-        const p = ctx.getImageData(px, y, 1, 1).data;
-        const isCardWhite = (p[0] > 230 && p[1] > 230 && p[2] > 230);
-
-        if (!isCardWhite && !inBar) {
-          inBar = true;
-          barStartY = y;
-        } else if (isCardWhite && inBar) {
-          inBar = false;
-          const barHeight = y - barStartY;
-          if (barHeight >= 4 && barHeight <= 26) {
-            candidates.push(Math.round((barStartY + y) / 2));
-          }
+      if (!isCardWhite && !inBar) {
+        inBar = true;
+        barStartY = y;
+      } else if (isCardWhite && inBar) {
+        inBar = false;
+        const barHeight = y - barStartY;
+        if (barHeight >= 4 && barHeight <= 26) {
+          barRowCandidates.push(Math.round((barStartY + y) / 2));
         }
-      }
-      if (candidates.length === 3) {
-        barRowCandidates = candidates;
-        break;
-      } else if (candidates.length > barRowCandidates.length) {
-        barRowCandidates = candidates;
       }
     }
 
@@ -413,52 +412,53 @@ const checkIfAppraisalScreen = (canvas) => {
     }
 
     const isRedPixel = (r, g, b) => {
-      // Direct RGB check for Pokémon GO's maxed coral-red bar (#E8535A)
-      return (r > 185 && g < 125 && b < 140 && (r - g > 60));
+      // Coral-red maxed bar: strong red channel, low green/blue
+      return r > 180 && g < 130 && b < 140 && (r - g > 50);
     };
 
-    const isColoredBarPixel = (r, g, b) => {
+    const isOrangePixel = (r, g, b) => {
       const [h, s, l] = rgbToHsl(r, g, b);
-      // Red or Orange bar fill
-      const isOrange = (h >= 14 && h <= 55 && s >= 28 && l >= 25 && l <= 85);
-      const isRed = isRedPixel(r, g, b) || (((h >= 335 || h <= 18) && s >= 20 && l >= 28 && l <= 85 && r > g + 18));
-      return isOrange || isRed;
+      return (h >= 14 && h <= 55 && s >= 28 && l >= 25 && l <= 85);
     };
 
     const ivs = barCenters.map((yCenter) => {
-      const offsets = [-3, -2, -1, 0, 1, 2, 3];
-      
-      // 1. FAST-PATH: Check if the bar is RED anywhere -> Instantly 15!
-      let hasRed = false;
-      for (let x = startX; x <= endX; x += 3) {
-        for (let dy of offsets) {
+      // Wide vertical offset window (±6 pixels) to never miss thin bar rows
+      const vOffsets = [-6, -4, -2, 0, 2, 4, 6];
+
+      // 1. Check for RED anywhere along this row -> ALWAYS 15
+      let redCount = 0;
+      for (let x = startX; x <= endX; x += 2) {
+        for (let dy of vOffsets) {
           const [r, g, b] = ctx.getImageData(x, yCenter + dy, 1, 1).data;
           if (isRedPixel(r, g, b)) {
-            hasRed = true;
+            redCount++;
             break;
           }
         }
-        if (hasRed) return 15;
       }
 
-      // 2. FAST-PATH: Check if the far-right end (100% mark) is filled -> Instantly 15!
-      let rightTipFilled = false;
-      for (let dy of offsets) {
+      if (redCount >= totalBarWidth * 0.15) {
+        return 15;
+      }
+
+      // 2. Check if right tip is filled -> ALWAYS 15
+      let tipFilled = false;
+      for (let dy of vOffsets) {
         const [r, g, b] = ctx.getImageData(endX - 2, yCenter + dy, 1, 1).data;
-        if (isColoredBarPixel(r, g, b)) {
-          rightTipFilled = true;
+        if (isOrangePixel(r, g, b) || isRedPixel(r, g, b)) {
+          tipFilled = true;
           break;
         }
       }
-      if (rightTipFilled) return 15;
+      if (tipFilled) return 15;
 
-      // 3. For 0 - 14: Count filled orange pixels from left to right
+      // 3. For 0 - 14: count orange length
       let filledPixels = 0;
       for (let x = startX; x <= endX; x++) {
         let isFilled = false;
-        for (let dy of offsets) {
+        for (let dy of vOffsets) {
           const [r, g, b] = ctx.getImageData(x, yCenter + dy, 1, 1).data;
-          if (isColoredBarPixel(r, g, b)) {
+          if (isOrangePixel(r, g, b) || isRedPixel(r, g, b)) {
             isFilled = true;
             break;
           }
@@ -485,7 +485,7 @@ const checkIfAppraisalScreen = (canvas) => {
     };
   };
   
-const extractMovesFromCanvas = async (worker, canvas) => {
+  const extractMovesFromCanvas = async (worker, canvas) => {
     // 1. Crop moves section (capturing Fast Attack and Charged Attacks cleanly)
     const mY = Math.round(canvas.height * 0.48);
     const mW = Math.round(canvas.width * 0.90);
@@ -564,9 +564,7 @@ const extractMovesFromCanvas = async (worker, canvas) => {
   };
 
   const handleFilesSelected = async (eventOrFiles) => {
-    // 1. Safe extraction of files regardless of how the handler was triggered
     let fileList = [];
-
     if (eventOrFiles instanceof FileList || Array.isArray(eventOrFiles)) {
       fileList = Array.from(eventOrFiles);
     } else if (eventOrFiles?.target?.files) {
@@ -583,8 +581,8 @@ const extractMovesFromCanvas = async (worker, canvas) => {
     try {
       const worker = await createWorker('eng');
 
-      // 2. Preload all selected images and initialize their canvases
-      const parsedImages = await Promise.all(
+      // 1. Preload canvases
+      const loadedImages = await Promise.all(
         fileList.map((file) => {
           return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -596,10 +594,7 @@ const extractMovesFromCanvas = async (worker, canvas) => {
                 canvas.height = img.naturalHeight || img.height;
                 const ctx = canvas.getContext('2d');
                 ctx.drawImage(img, 0, 0);
-
-                // Identify screen type upfront
-                const isAppraisal = checkIfAppraisalScreen(canvas);
-                resolve({ canvas, dataUrl: ev.target.result, isAppraisal });
+                resolve({ canvas, dataUrl: ev.target.result });
               };
               img.onerror = reject;
               img.src = ev.target.result;
@@ -610,13 +605,18 @@ const extractMovesFromCanvas = async (worker, canvas) => {
         })
       );
 
-      // 3. Guarantee Appraisal screens are processed FIRST (isAppraisal = true first)
+      // 2. Classify screens
+      const parsedImages = [];
+      for (const item of loadedImages) {
+        const isAppraisal = await checkIfAppraisalScreen(worker, item.canvas);
+        parsedImages.push({ ...item, isAppraisal });
+      }
+
+      // 3. Sort: Appraisal screens FIRST, Moveset screens SECOND
       parsedImages.sort((a, b) => (b.isAppraisal ? 1 : 0) - (a.isAppraisal ? 1 : 0));
 
-      // Only keep activeRecord if the user explicitly clicked "Attach Moveset Pic" inside an open modal
-      const isAttachingMoveset = isModalOpen && activeRecord && fileList.length === 1 && !parsedImages[0].isAppraisal;
-
-      let current = isAttachingMoveset ? { ...activeRecord } : {
+      // Reset record state for fresh uploads
+      let current = {
         id: 'poke_' + Date.now(),
         name: '',
         cp: 0,
@@ -636,7 +636,7 @@ const extractMovesFromCanvas = async (worker, canvas) => {
         const { canvas, dataUrl, isAppraisal } = parsedImages[i];
 
         if (isAppraisal) {
-          setStatusMsg(`Analyzing Appraisal Screen (${i + 1}/${parsedImages.length})...`);
+          setStatusMsg(`Scanning Appraisal Screen (${i + 1}/${parsedImages.length})...`);
           const ivs = analyzeIVBars(canvas);
 
           // CP Detection
@@ -669,7 +669,6 @@ const extractMovesFromCanvas = async (worker, canvas) => {
           const nameRes = await worker.recognize(nameCanvas);
           const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
 
-          // Set thumbnail preview
           if (ivs.debugCardBox) {
             const box = ivs.debugCardBox;
             const debugCanvas = document.createElement('canvas');
@@ -700,8 +699,7 @@ const extractMovesFromCanvas = async (worker, canvas) => {
           if (cpMatch) current.cp = parseInt(cpMatch[0], 10);
           current.screenshot = dataUrl;
         } else {
-          // Moveset Screen
-          setStatusMsg(`Analyzing Moveset Screen (${i + 1}/${parsedImages.length})...`);
+          setStatusMsg(`Scanning Moveset Screen (${i + 1}/${parsedImages.length})...`);
           current.fastMove = '';
           current.chargedMove = '';
           const moves = await extractMovesFromCanvas(worker, canvas);
