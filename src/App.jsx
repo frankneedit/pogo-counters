@@ -279,25 +279,27 @@ export default function App() {
     setRecords(data);
   };
 
-  const rgbToHsl = (r, g, b) => {
-    r /= 255; g /= 255; b /= 255;
-    const max = Math.max(r, g, b), min = Math.min(r, g, b);
-    let h, s, l = (max + min) / 2;
-    if (max === min) {
-      h = s = 0;
-    } else {
-      const d = max - min;
-      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-      switch (max) {
-        case r: h = (g - b) / d + (g < b ? 6 : 0); break;
-        case g: h = (b - r) / d + 2; break;
-        case b: h = (r - g) / d + 4; break;
-      }
-      h /= 6;
-    }
-    return [h * 360, s * 100, l * 100];
-  };
+function rgbToHsl(r, g, b) {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s, l = (max + min) / 2;
 
+  if (max === min) {
+    h = s = 0;
+  } else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
+    }
+    h = Math.round(h * 60);
+  }
+  return [h, Math.round(s * 100), Math.round(l * 100)];
+}
   const checkIfAppraisal = (canvas) => {
     const ctx = canvas.getContext('2d');
     const W = canvas.width;
@@ -505,38 +507,29 @@ const extractMovesFromCanvas = async (worker, canvas) => {
     };
   };
 
-  const handleFilesSelected = async (fileList) => {
-    if (!fileList || fileList.length === 0) return;
-    setIsProcessing(true);
+  const handleFilesSelected = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
 
-    const rawFiles = Array.from(fileList);
-    setStatusMsg(`Loading ${rawFiles.length} screenshot(s)...`);
+    setIsProcessing(true);
+    setStatusMsg("Loading screenshots...");
 
     try {
-      const loadedScreens = [];
-      for (let file of rawFiles) {
-        const dataUrl = await new Promise((res) => {
-          const reader = new FileReader();
-          reader.onload = (e) => res(e.target.result);
-          reader.readAsDataURL(file);
-        });
-        const img = new Image();
-        img.src = dataUrl;
-        await new Promise((res) => (img.onload = res));
-
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        canvas.getContext('2d').drawImage(img, 0, 0);
-
-        const isAppraisal = checkIfAppraisal(canvas);
-        loadedScreens.push({ canvas, dataUrl, isAppraisal });
-      }
-
-      loadedScreens.sort((a, b) => (b.isAppraisal ? 1 : 0) - (a.isAppraisal ? 1 : 0));
-
       const worker = await createWorker('eng');
-     let current = activeRecord ? { ...activeRecord } : {
+
+      // Initialize loadedScreens array
+      const loadedScreens = await Promise.all(
+        files.map(file => {
+          return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (ev) => resolve(ev.target.result);
+            reader.readAsDataURL(file);
+          });
+        })
+      );
+
+      // Current record setup
+      let current = activeRecord ? { ...activeRecord } : {
         id: 'poke_' + Date.now(),
         name: '',
         cp: 0,
@@ -552,19 +545,29 @@ const extractMovesFromCanvas = async (worker, canvas) => {
         createdAt: Date.now()
       };
 
-      // Reset moves before parsing a moveset screen so prior scans never linger
-      if (!isAppraisal) {
-        current.fastMove = '';
-        current.chargedMove = '';
-      }
       for (let i = 0; i < loadedScreens.length; i++) {
-        const { canvas, dataUrl, isAppraisal } = loadedScreens[i];
+        const dataUrl = loadedScreens[i];
+        const img = new Image();
+        img.src = dataUrl;
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+        });
+
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || img.width;
+        canvas.height = img.naturalHeight || img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+
+        // Detect if it is an Appraisal screen (contains 3-star badge or leader portrait)
+        const isAppraisal = checkIfAppraisalScreen(canvas);
 
         if (isAppraisal) {
-          setStatusMsg(`Analyzing Appraisal Screen (${i + 1}/${loadedScreens.length})...`);
+          setStatusMsg(`Analyzing Appraisal (${i + 1}/${loadedScreens.length})...`);
           const ivs = analyzeIVBars(canvas);
 
-          // CP Crop
+          // CP Detection
           const cpW = Math.round(canvas.width * 0.45);
           const cpH = Math.round(canvas.height * 0.08);
           const cpCanvas = document.createElement('canvas');
@@ -579,7 +582,7 @@ const extractMovesFromCanvas = async (worker, canvas) => {
           const cpRes = await worker.recognize(cpCanvas);
           const cpMatch = cpRes.data.text.match(/\d{3,4}/);
 
-          // Species Name Crop
+          // Name Detection
           const nW = Math.round(canvas.width * 0.6);
           const nH = Math.round(canvas.height * 0.06);
           const nameCanvas = document.createElement('canvas');
@@ -594,59 +597,60 @@ const extractMovesFromCanvas = async (worker, canvas) => {
           const nameRes = await worker.recognize(nameCanvas);
           const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
 
-          // Adjusted Debug Visual Crop:
-          // Shifted Y from 0.75 down to 0.725 and widened slightly to center Attack, Defense, and HP
-          const dW = Math.round(canvas.width * 0.44);
-          const dH = Math.round(canvas.height * 0.16);
-          const box = ivs.debugCardBox;
-          const debugCanvas = document.createElement('canvas');
-          debugCanvas.width = box.w;
-          debugCanvas.height = box.h;
-          debugCanvas.getContext('2d').drawImage(
-            canvas,
-            box.x, box.y, box.w, box.h,
-            0, 0, box.w, box.h
-          );
-          setDebugCropUrl(debugCanvas.toDataURL()); 
+          // Debug preview thumbnail
+          if (ivs.debugCardBox) {
+            const box = ivs.debugCardBox;
+            const debugCanvas = document.createElement('canvas');
+            debugCanvas.width = box.w;
+            debugCanvas.height = box.h;
+            debugCanvas.getContext('2d').drawImage(
+              canvas,
+              box.x, box.y, box.w, box.h,
+              0, 0, box.w, box.h
+            );
+            setDebugCropUrl(debugCanvas.toDataURL());
+          }
 
           const totalIv = ivs.atk + ivs.def + ivs.hp;
           current.atk = ivs.atk;
           current.def = ivs.def;
           current.hp = ivs.hp;
           current.ivPercentage = parseFloat(((totalIv / 45) * 100).toFixed(1));
-          
+
           if (cleanName.length >= 3) {
             current.name = cleanName;
-            setStatusMsg(`Fetching types for ${cleanName}...`);
-            current.types = await fetchPokemonTypesOnline(cleanName);
+            try {
+              current.types = await fetchPokemonTypesOnline(cleanName);
+            } catch (err) {
+              console.warn("Could not fetch online types:", err);
+            }
           }
           if (cpMatch) current.cp = parseInt(cpMatch[0], 10);
           current.screenshot = dataUrl;
-        }else {
-          setStatusMsg(`Analyzing Moveset Screen (${i + 1}/${loadedScreens.length})...`);
+        } else {
+          // Moveset screen
+          setStatusMsg(`Analyzing Moveset (${i + 1}/${loadedScreens.length})...`);
+          current.fastMove = '';
+          current.chargedMove = '';
           const moves = await extractMovesFromCanvas(worker, canvas);
           if (moves.fast) current.fastMove = moves.fast;
           if (moves.charged) current.chargedMove = moves.charged;
-          if (!current.screenshot) current.screenshot = dataUrl;
         }
       }
 
-      if (!current.name) current.name = 'Pokémon';
-      const tags = [];
-      if (current.atk + current.def + current.hp === 45) tags.push('Hundo (100%)');
-      if (current.cp <= 1500) tags.push('Great League');
-      else if (current.cp <= 2500) tags.push('Ultra League');
-      else tags.push('Master League');
-      current.tags = tags;
-
       await worker.terminate();
-      setActiveRecord(current);
-      setIsModalOpen(true);
-    } catch (err) {
-      console.error('Scan error:', err);
+
+      // Open verification modal with scanned data
+      setScannedPokemon(current);
+      setShowVerifyModal(true);
+    } catch (error) {
+      console.error("Scan processing error:", error);
+      alert("Error scanning image: " + (error.message || error));
     } finally {
       setIsProcessing(false);
-      setStatusMsg('');
+      setStatusMsg("");
+      // Reset input value so re-selecting same files triggers change event
+      e.target.value = "";
     }
   };
 
