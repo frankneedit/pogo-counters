@@ -344,7 +344,6 @@ export default function App() {
   };
 
  const extractMovesFromCanvas = async (worker, canvas) => {
-    // Crop lower section containing tabs and moves
     const mY = Math.round(canvas.height * 0.52);
     const mW = Math.round(canvas.width * 0.90);
     const mH = Math.round(canvas.height * 0.40);
@@ -370,7 +369,7 @@ export default function App() {
 
     const linesAfterTab = startIdx !== -1 ? rawLines.slice(startIdx + 1) : rawLines;
 
-    // 2. Filter out non-move UI lines (Power Up, Mega, Max, Trade, Buttons)
+    // 2. Filter lines and collect Fast + up to 2 Charged moves
     const validMoveLines = [];
     for (let line of linesAfterTab) {
       const up = line.toUpperCase();
@@ -402,11 +401,13 @@ export default function App() {
       }
 
       validMoveLines.push(line);
-      if (validMoveLines.length >= 2) break;
+      // Allow up to 3 moves (1 Fast + 2 Charged)
+      if (validMoveLines.length >= 3) break;
     }
 
     return {
       fast: validMoveLines[0] ? matchNearestMove(validMoveLines[0]) : '',
+      // Joins dual moves into "Hydro Pump / Outrage"
       charged: validMoveLines.slice(1).map(matchNearestMove).filter(Boolean).join(' / ')
     };
   };
