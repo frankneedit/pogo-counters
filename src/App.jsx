@@ -499,62 +499,75 @@ function rgbToHsl(r, g, b) {
   };
   
   const extractMovesFromCanvas = async (worker, canvas) => {
-    // 1. Cover from below the candy stats down through the move buttons (Y: 48% to 92%)
-    const mY = Math.round(canvas.height * 0.48);
-    const mW = Math.round(canvas.width * 0.92);
-    const mH = Math.round(canvas.height * 0.44);
+    // Crop horizontally from 8% to 65% width to isolate move names
+    // and completely cut out energy bars and damage numbers on the right
+    const cropX = Math.round(canvas.width * 0.08);
+    const cropW = Math.round(canvas.width * 0.60);
+    const cropY = Math.round(canvas.height * 0.50);
+    const cropH = Math.round(canvas.height * 0.40);
 
     const moveCanvas = document.createElement('canvas');
-    moveCanvas.width = mW;
-    moveCanvas.height = mH;
+    moveCanvas.width = cropW;
+    moveCanvas.height = cropH;
     moveCanvas.getContext('2d').drawImage(
       canvas,
-      Math.round(canvas.width * 0.04), mY, mW, mH,
-      0, 0, mW, mH
+      cropX, cropY, cropW, cropH,
+      0, 0, cropW, cropH
     );
 
     const moveRes = await worker.recognize(moveCanvas);
     const rawLines = (moveRes.data.text || '').split('\n').map(l => l.trim()).filter(Boolean);
 
-    // 2. Identify and collect potential move lines
-    const moveAreaLines = [];
-    for (let rawLine of rawLines) {
-      const up = rawLine.toUpperCase();
+    console.log("Raw OCR lines for moves:", rawLines);
 
-      // UI noise filters
+    const candidateLines = [];
+    for (let line of rawLines) {
+      const up = line.toUpperCase();
       if (
-        rawLine.length < 3 ||
-        up.includes('GYMS') ||
-        up.includes('RAIDS') ||
-        up.includes('TRAINER BATTLES') ||
-        up.includes('POWER UP') ||
-        up.includes('MEGA EVOLVE') ||
-        up.includes('STARDUST') ||
-        up.includes('CANDY') ||
+        line.length < 3 ||
+        up.includes('GYM') ||
+        up.includes('RAID') ||
+        up.includes('TRAINER') ||
+        up.includes('POWER') ||
+        up.includes('EVOLVE') ||
+        up.includes('NEW ATTACK') ||
+        up.includes('MAX MOVE') ||
         up.includes('WEATHER') ||
-        up.includes('BONUS') ||
-        up.includes('MAX MOVES') ||
-        up.includes('WEIGHT') ||
-        up.includes('HEIGHT')
+        up.includes('BONUS')
       ) {
         continue;
       }
-
-      // If the line contains "NEW ATTACK" but ALSO contains a move name, strip "NEW ATTACK"
-      let cleaned = rawLine.replace(/NEW ATTACK/gi, '').replace(/\d+/g, '').trim();
-      if (cleaned.length >= 3) {
-        moveAreaLines.push(cleaned);
-      }
+      candidateLines.push(line);
     }
 
-    // 3. Match recognized lines against known moves
+    // Always include common known moves
+    const standardMoves = [
+      "Body Slam", "Zen Headbutt", "Lick", "Earthquake", "Superpower", "Heavy Slam", "Hyper Beam", "Outrage",
+      "Charm", "Dazzling Gleam", "Shadow Ball", "Synchronoise", "Psychic",
+      "Counter", "Close Combat", "Cross Chop", "Dynamic Punch",
+      "Thunder Shock", "Discharge", "Wild Charge", "Thunderbolt"
+    ];
+
+    const allMoves = Array.from(new Set([...(liveMovesList || []), ...standardMoves]));
+
     const recognizedMoves = [];
-    for (let raw of moveAreaLines) {
-      const matched = matchNearestMove(raw);
-      if (matched && !recognizedMoves.includes(matched)) {
-        recognizedMoves.push(matched);
+    for (const raw of candidateLines) {
+      const cleanRaw = raw.replace(/[^a-zA-Z\s]/g, '').trim().toLowerCase();
+      
+      // Match against known moves
+      for (const m of allMoves) {
+        const cleanMove = m.toLowerCase().replace(/-/g, ' ');
+        if (cleanRaw.includes(cleanMove) || cleanMove.includes(cleanRaw)) {
+          const formatted = cleanMove.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+          if (!recognizedMoves.includes(formatted)) {
+            recognizedMoves.push(formatted);
+          }
+          break;
+        }
       }
     }
+
+    console.log("Recognized moves:", recognizedMoves);
 
     return {
       fast: recognizedMoves[0] || '',
