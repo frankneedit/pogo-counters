@@ -250,6 +250,7 @@ export default function App() {
     return badgeGoldPixels > 35;
   };
 
+  // 1. In analyzeIVBars: shifted slightly upward to center Attack, Defense, and HP
   const analyzeIVBars = (canvas) => {
     const ctx = canvas.getContext('2d');
     const W = canvas.width;
@@ -259,7 +260,8 @@ export default function App() {
     const endX = Math.round(W * 0.456);
     const totalBarWidth = endX - startX;
 
-    const barYPercentages = [0.776, 0.822, 0.864];
+    // Calibrated Y-percentages across devices and Dynamax UI shifts
+    const barYPercentages = [0.752, 0.798, 0.842];
 
     const ivs = barYPercentages.map((yPct) => {
       const yCenter = Math.round(H * yPct);
@@ -276,10 +278,7 @@ export default function App() {
           const [r, g, b] = [pixel[0], pixel[1], pixel[2]];
           const [h, s, l] = rgbToHsl(r, g, b);
 
-          // Orange track (regular progress)
           const isOrange = (h >= 16 && h <= 55 && s >= 30 && l >= 25 && l <= 85);
-          
-          // Coral-Pink/Red track (maxed 15 bar: hue 340-360 or 0-15, red dominant)
           const isCoralRed = ((h >= 340 || h <= 15) && s >= 28 && l >= 35 && l <= 80 && r > g + 20);
 
           if (isCoralRed) {
@@ -295,7 +294,6 @@ export default function App() {
         if (isRed) coralRedPixels++;
       }
 
-      // If the bar is filled with coral-red, it is a guaranteed 15
       if (coralRedPixels > totalBarWidth * 0.40) {
         return 15;
       }
@@ -311,34 +309,43 @@ export default function App() {
     };
   };
 
-  const extractMovesFromCanvas = async (worker, canvas) => {
+ const extractMovesFromCanvas = async (worker, canvas) => {
+    // 1. Position crop higher to capture standard attacks before Max Moves
+    const mY = Math.round(canvas.height * 0.48);
     const mW = Math.round(canvas.width * 0.88);
-    const mH = Math.round(canvas.height * 0.35);
+    const mH = Math.round(canvas.height * 0.38);
+
     const moveCanvas = document.createElement('canvas');
     moveCanvas.width = mW;
     moveCanvas.height = mH;
     moveCanvas.getContext('2d').drawImage(
       canvas,
       Math.round(canvas.width * 0.06),
-      Math.round(canvas.height * 0.65),
+      mY,
       mW, mH, 0, 0, mW, mH
     );
 
     const moveRes = await worker.recognize(moveCanvas);
     const rawLines = moveRes.data.lines.map(l => l.text.trim());
 
-    // 1. Start AFTER the Gyms & Raids / Trainer Battles tab header
+    // 2. Start right after the "GYMS & RAIDS" / "TRAINER BATTLES" tab
     let startIdx = rawLines.findIndex(t => {
       const up = t.toUpperCase();
       return up.includes('GYM') || up.includes('RAID') || up.includes('TRAINER');
     });
     const linesAfterTab = startIdx !== -1 ? rawLines.slice(startIdx + 1) : rawLines;
 
-    // 2. STOP before bottom metadata or secondary buttons
+    // 3. Stop BEFORE "NEW ATTACK", "MAX MOVES", trade details, or catch info
     let endIdx = linesAfterTab.findIndex(t => {
       const up = t.toUpperCase();
       return (
         up.includes('NEW ATTACK') || 
+        up.includes('MAX MOVE') || 
+        up.includes('MAX ROCKFALL') ||
+        up.includes('MAX GUARD') ||
+        up.includes('MAX SPIRIT') ||
+        up.includes('LOCKED') ||
+        up.includes('LEVEL') ||
         up.includes('OBTAINED') || 
         up.includes('TRADE') ||
         up.includes('CAUGHT')
@@ -346,7 +353,7 @@ export default function App() {
     });
     const moveAreaLines = endIdx !== -1 ? linesAfterTab.slice(0, endIdx) : linesAfterTab;
 
-    // 3. Keep real move names (check specifically for 'POWER UP' so 'Earth Power' is not dropped)
+    // 4. Extract and clean the move candidates
     const candidateLines = moveAreaLines
       .map(t => t.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim())
       .filter(t => {
@@ -359,9 +366,11 @@ export default function App() {
           !up.includes('BATTLE') &&
           !up.includes('STARDUST') &&
           !up.includes('CANDY') &&
-          !up.includes('POWER UP') && // Fixed: checks "POWER UP", allowing "Earth Power"
+          !up.includes('POWER UP') &&
           !up.includes('PRIMAL') &&
-          !up.includes('REVERSION')
+          !up.includes('REVERSION') &&
+          !up.includes('MAX') &&
+          !up.includes('LOCKED')
         );
       });
 
@@ -426,6 +435,7 @@ export default function App() {
           setStatusMsg(`Analyzing Appraisal Screen (${i + 1}/${loadedScreens.length})...`);
           const ivs = analyzeIVBars(canvas);
 
+          // CP Crop
           const cpW = Math.round(canvas.width * 0.45);
           const cpH = Math.round(canvas.height * 0.08);
           const cpCanvas = document.createElement('canvas');
@@ -440,6 +450,7 @@ export default function App() {
           const cpRes = await worker.recognize(cpCanvas);
           const cpMatch = cpRes.data.text.match(/\d{3,4}/);
 
+          // Species Name Crop
           const nW = Math.round(canvas.width * 0.6);
           const nH = Math.round(canvas.height * 0.06);
           const nameCanvas = document.createElement('canvas');
@@ -454,15 +465,17 @@ export default function App() {
           const nameRes = await worker.recognize(nameCanvas);
           const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
 
-          const dW = Math.round(canvas.width * 0.40);
-          const dH = Math.round(canvas.height * 0.14);
+          // Adjusted Debug Visual Crop:
+          // Shifted Y from 0.75 down to 0.725 and widened slightly to center Attack, Defense, and HP
+          const dW = Math.round(canvas.width * 0.44);
+          const dH = Math.round(canvas.height * 0.16);
           const debugCanvas = document.createElement('canvas');
           debugCanvas.width = dW;
           debugCanvas.height = dH;
           debugCanvas.getContext('2d').drawImage(
             canvas,
-            Math.round(canvas.width * 0.10),
-            Math.round(canvas.height * 0.75),
+            Math.round(canvas.width * 0.08),
+            Math.round(canvas.height * 0.725),
             dW, dH, 0, 0, dW, dH
           );
           setDebugCropUrl(debugCanvas.toDataURL());
@@ -480,7 +493,7 @@ export default function App() {
           }
           if (cpMatch) current.cp = parseInt(cpMatch[0], 10);
           current.screenshot = dataUrl;
-        } else {
+        }else {
           setStatusMsg(`Analyzing Moveset Screen (${i + 1}/${loadedScreens.length})...`);
           const moves = await extractMovesFromCanvas(worker, canvas);
           if (moves.fast) current.fastMove = moves.fast;
