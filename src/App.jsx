@@ -30,26 +30,59 @@ const fetchPokemonTypesOnline = async (speciesName) => {
     return [];
   }
 };
-
-const KNOWN_MOVES = [
+// Base offline fallback
+const FALLBACK_MOVES = [
   "Mud Shot", "Metal Claw", "Dragon Tail", "Dragon Breath", "Counter", 
   "Shadow Claw", "Vine Whip", "Razor Leaf", "Water Gun", "Waterfall",
   "Fire Fang", "Fire Spin", "Incinerate", "Bullet Punch", "Snarl",
   "Bite", "Lick", "Psycho Cut", "Confusion", "Lock-On", "Thunder Shock",
   "Volt Switch", "Spark", "Poison Jab", "Hex", "Air Slash", "Wing Attack",
   "Gust", "Ice Shard", "Powder Snow", "Smack Down", "Rock Throw", "Mud-Slap",
-  
-  // Charged Moves
-  "Earth Power", "Earthquake", "Draco Meteor", "Precipice Blades", "Roar of Time", "Iron Head",
-  "Outrage", "Sand Tomb", "Hydro Cannon", "Surf", "Origin Pulse", "Blast Burn", "Overheat",
-  "Fire Blast", "Frenzy Plant", "Solar Beam", "Energy Ball", "Grass Knot",
-  "Wild Charge", "Thunderbolt", "Thunder", "Zap Cannon", "Close Combat",
-  "Dynamic Punch", "Aura Sphere", "Superpower", "Cross Chop", "Shadow Ball",
-  "Dark Pulse", "Foul Play", "Crunch", "Psychic", "Psyshock", "Moonblast",
-  "Play Rough", "Dazzling Gleam", "Ice Beam", "Blizzard", "Avalanche",
-  "Stone Edge", "Rock Slide", "Sludge Bomb", "Sludge Wave", "Gunk Shot",
-  "Brave Bird", "Sky Attack", "Hurricane", "Fly", "Aeroblast", "Sacred Fire"
+  "Dragon Claw", "Earth Power", "Earthquake", "Draco Meteor", "Precipice Blades", 
+  "Roar of Time", "Iron Head", "Outrage", "Sand Tomb", "Hydro Cannon", "Surf", 
+  "Origin Pulse", "Blast Burn", "Overheat", "Fire Blast", "Frenzy Plant", 
+  "Solar Beam", "Energy Ball", "Grass Knot", "Wild Charge", "Thunderbolt", 
+  "Thunder", "Zap Cannon", "Close Combat", "Dynamic Punch", "Aura Sphere", 
+  "Superpower", "Cross Chop", "Shadow Ball", "Dark Pulse", "Foul Play", 
+  "Crunch", "Psychic", "Psyshock", "Moonblast", "Play Rough", "Dazzling Gleam", 
+  "Ice Beam", "Blizzard", "Avalanche", "Stone Edge", "Rock Slide", 
+  "Sludge Bomb", "Sludge Wave", "Gunk Shot", "Brave Bird", "Sky Attack", 
+  "Hurricane", "Fly", "Aeroblast", "Sacred Fire"
 ];
+
+// In-memory master list (starts with cached or fallback, updates live)
+let liveMovesList = JSON.parse(localStorage.getItem('poke_all_moves') || '[]');
+if (liveMovesList.length === 0) {
+  liveMovesList = FALLBACK_MOVES;
+}
+
+// Automatically pulls ALL 900+ official moves from PokéAPI and caches them
+export const syncLiveMovesFromApi = async () => {
+  try {
+    const cached = localStorage.getItem('poke_all_moves');
+    if (cached) {
+      liveMovesList = JSON.parse(cached);
+      return;
+    }
+
+    const res = await fetch('https://pokeapi.co/api/v2/move?limit=1000');
+    if (!res.ok) return;
+
+    const data = await res.json();
+    // Convert 'earth-power' -> 'Earth Power', 'dragon-claw' -> 'Dragon Claw'
+    const formattedMoves = data.results.map((m) =>
+      m.name
+        .split('-')
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ')
+    );
+
+    liveMovesList = Array.from(new Set([...FALLBACK_MOVES, ...formattedMoves]));
+    localStorage.setItem('poke_all_moves', JSON.stringify(liveMovesList));
+  } catch (err) {
+    console.warn('Could not fetch live moves from PokéAPI, using fallback list.', err);
+  }
+};
 const getSimilarity = (s1, s2) => {
   const str1 = s1.toLowerCase().trim();
   const str2 = s2.toLowerCase().trim();
@@ -77,18 +110,32 @@ const getSimilarity = (s1, s2) => {
 
 const matchNearestMove = (rawOcrText) => {
   if (!rawOcrText || rawOcrText.length < 3) return "";
-  const cleaned = rawOcrText.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim();
 
+  const cleaned = rawOcrText.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim();
+  const lowerCleaned = cleaned.toLowerCase();
+
+  const movesToSearch = (liveMovesList && liveMovesList.length > 0) ? liveMovesList : FALLBACK_MOVES;
+
+  // 1. Direct Substring Check: if an official move is present in OCR string, snap immediately
+  for (const move of movesToSearch) {
+    const lowerMove = move.toLowerCase();
+    if (lowerCleaned.startsWith(lowerMove) || lowerCleaned.includes(lowerMove)) {
+      return move;
+    }
+  }
+
+  // 2. Fuzzy match fallback
   let bestMatch = cleaned;
   let highestScore = 0;
 
-  for (const move of KNOWN_MOVES) {
+  for (const move of movesToSearch) {
     const score = getSimilarity(cleaned, move);
     if (score > highestScore) {
       highestScore = score;
       bestMatch = move;
     }
   }
+
   return highestScore >= 0.55 ? bestMatch : cleaned;
 };
 
@@ -159,8 +206,8 @@ export default function App() {
 
   useEffect(() => {
     loadAll();
+    syncLiveMovesFromApi(); // Runs in the background once on startup
   }, []);
-
   const loadAll = async () => {
     const data = await getAllRecords();
     setRecords(data);
