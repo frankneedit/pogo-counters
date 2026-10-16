@@ -676,7 +676,7 @@ const extractMovesFromCanvas = async (worker, canvas) => {
 
       await worker.terminate();
 
-      setScannedPokemon(current);
+      setActiveRecord(current);
       setShowVerifyModal(true);
     } catch (error) {
       console.error("Scan processing error:", error);
