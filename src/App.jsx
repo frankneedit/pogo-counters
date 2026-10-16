@@ -321,59 +321,63 @@ export default function App() {
     const W = canvas.width;
     const H = canvas.height;
 
-    // 1. Horizontal bar bounds
     const startX = Math.round(W * 0.118);
     const endX = Math.round(W * 0.456);
     const totalBarWidth = endX - startX;
 
-    // 2. Sample down a vertical line passing through the middle of the bars (28% of width)
-    const probeX = Math.round(W * 0.28);
     const yStart = Math.round(H * 0.72);
     const yEnd = Math.round(H * 0.88);
 
-    // Find the vertical center of the 3 bars by detecting non-white pixels
-    const barRowCandidates = [];
-    let inBar = false;
-    let barStartY = 0;
+    // Multi-column sampling to avoid hitting white segment dividers
+    const probeXs = [Math.round(W * 0.20), Math.round(W * 0.28), Math.round(W * 0.36)];
+    
+    let barRowCandidates = [];
+    for (const px of probeXs) {
+      const candidates = [];
+      let inBar = false;
+      let barStartY = 0;
 
-    for (let y = yStart; y <= yEnd; y++) {
-      const p = ctx.getImageData(probeX, y, 1, 1).data;
-      const isCardWhite = (p[0] > 230 && p[1] > 230 && p[2] > 230);
+      for (let y = yStart; y <= yEnd; y++) {
+        const p = ctx.getImageData(px, y, 1, 1).data;
+        const isCardWhite = (p[0] > 230 && p[1] > 230 && p[2] > 230);
 
-      if (!isCardWhite && !inBar) {
-        inBar = true;
-        barStartY = y;
-      } else if (isCardWhite && inBar) {
-        inBar = false;
-        const barHeight = y - barStartY;
-        // The three IV bars are typically 6-18px thick
-        if (barHeight >= 4 && barHeight <= 24) {
-          barRowCandidates.push(Math.round((barStartY + y) / 2));
+        if (!isCardWhite && !inBar) {
+          inBar = true;
+          barStartY = y;
+        } else if (isCardWhite && inBar) {
+          inBar = false;
+          const barHeight = y - barStartY;
+          if (barHeight >= 4 && barHeight <= 26) {
+            candidates.push(Math.round((barStartY + y) / 2));
+          }
         }
+      }
+      if (candidates.length === 3) {
+        barRowCandidates = candidates;
+        break;
+      } else if (candidates.length > barRowCandidates.length) {
+        barRowCandidates = candidates;
       }
     }
 
-    // If 3 bars were detected cleanly, use their exact centers.
-    // Otherwise fallback to calibrated screen proportions.
     let barCenters = [];
     if (barRowCandidates.length === 3) {
       barCenters = barRowCandidates;
     } else if (barRowCandidates.length > 3) {
-      // Pick the last 3 detected bars (closest to bottom)
       barCenters = barRowCandidates.slice(-3);
     } else {
-      // Fallback
+      // Calibrated baseline fallback
       barCenters = [
-        Math.round(H * 0.778),
-        Math.round(H * 0.816),
-        Math.round(H * 0.854)
+        Math.round(H * 0.755),
+        Math.round(H * 0.798),
+        Math.round(H * 0.840)
       ];
     }
 
     const ivs = barCenters.map((yCenter) => {
       let filledPixels = 0;
       let coralRedPixels = 0;
-      const offsets = [-2, 0, 2];
+      const offsets = [-3, -1, 0, 1, 3];
 
       for (let x = startX; x <= endX; x++) {
         let isFilled = false;
@@ -408,7 +412,7 @@ export default function App() {
       return Math.min(15, Math.max(0, Math.round(ratio * 15)));
     });
 
-    const cropTop = barCenters[0] - Math.round(H * 0.035);
+    const cropTop = barCenters[0] - Math.round(H * 0.030);
 
     return {
       atk: ivs[0] ?? 0,
@@ -418,7 +422,7 @@ export default function App() {
         x: Math.round(W * 0.07),
         y: cropTop,
         w: Math.round(W * 0.44),
-        h: Math.round(H * 0.14)
+        h: Math.round(H * 0.15)
       }
     };
   };
@@ -450,12 +454,14 @@ const extractMovesFromCanvas = async (worker, canvas) => {
     const moveAreaLines = [];
     for (let line of linesAfterTab) {
       const up = line.toUpperCase();
-      if (
+       if (
         up.includes('NEW ATTACK') || 
         up.includes('MAX MOVE') || 
         up.includes('OBTAINED') || 
         up.includes('CAUGHT') ||
-        up.includes('WALKED')
+        up.includes('WALKED') ||
+        up.includes('WEIGHT') ||
+        up.includes('HEIGHT')
       ) {
         break;
       }
@@ -524,7 +530,7 @@ const extractMovesFromCanvas = async (worker, canvas) => {
       loadedScreens.sort((a, b) => (b.isAppraisal ? 1 : 0) - (a.isAppraisal ? 1 : 0));
 
       const worker = await createWorker('eng');
-      let current = activeRecord ? { ...activeRecord } : {
+     let current = activeRecord ? { ...activeRecord } : {
         id: 'poke_' + Date.now(),
         name: '',
         cp: 0,
@@ -540,6 +546,11 @@ const extractMovesFromCanvas = async (worker, canvas) => {
         createdAt: Date.now()
       };
 
+      // Reset moves before parsing a moveset screen so prior scans never linger
+      if (!isAppraisal) {
+        current.fastMove = '';
+        current.chargedMove = '';
+      }
       for (let i = 0; i < loadedScreens.length; i++) {
         const { canvas, dataUrl, isAppraisal } = loadedScreens[i];
 
