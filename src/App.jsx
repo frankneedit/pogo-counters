@@ -111,24 +111,29 @@ const getSimilarity = (s1, s2) => {
 const matchNearestMove = (rawOcrText) => {
   if (!rawOcrText || rawOcrText.length < 3) return "";
 
+  // Strip numbers and non-letter symbols
   const cleaned = rawOcrText.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim();
   const lowerCleaned = cleaned.toLowerCase();
 
   const movesToSearch = (liveMovesList && liveMovesList.length > 0) ? liveMovesList : FALLBACK_MOVES;
 
-  // 1. Direct Substring Check: if an official move is present in OCR string, snap immediately
-  for (const move of movesToSearch) {
+  // 1. Sort candidate moves by length descending so "Discharge" matches before "Charge"
+  const sortedMoves = [...movesToSearch].sort((a, b) => b.length - a.length);
+
+  for (const move of sortedMoves) {
     const lowerMove = move.toLowerCase();
-    if (lowerCleaned.startsWith(lowerMove) || lowerCleaned.includes(lowerMove)) {
+    // Match exact word boundary or full prefix/contains
+    const regex = new RegExp(`\\b${lowerMove}\\b`, 'i');
+    if (regex.test(lowerCleaned) || lowerCleaned.startsWith(lowerMove)) {
       return move;
     }
   }
 
   // 2. Fuzzy match fallback
-  let bestMatch = cleaned;
+  let bestMatch = "";
   let highestScore = 0;
 
-  for (const move of movesToSearch) {
+  for (const move of sortedMoves) {
     const score = getSimilarity(cleaned, move);
     if (score > highestScore) {
       highestScore = score;
@@ -136,7 +141,7 @@ const matchNearestMove = (rawOcrText) => {
     }
   }
 
-  return highestScore >= 0.55 ? bestMatch : cleaned;
+  return highestScore >= 0.60 ? bestMatch : "";
 };
 
 const getAllRecords = async () => {
@@ -369,12 +374,10 @@ export default function App() {
 
     const linesAfterTab = startIdx !== -1 ? rawLines.slice(startIdx + 1) : rawLines;
 
-    // 2. Filter lines and collect Fast + up to 2 Charged moves
-    const validMoveLines = [];
+    // 2. Extract lines strictly BEFORE "NEW ATTACK" or footer metadata
+    const moveAreaLines = [];
     for (let line of linesAfterTab) {
       const up = line.toUpperCase();
-      
-      // Stop before bottom buttons or metadata
       if (
         up.includes('NEW ATTACK') || 
         up.includes('MAX MOVE') || 
@@ -382,33 +385,28 @@ export default function App() {
         up.includes('CAUGHT') ||
         up.includes('WALKED')
       ) {
-        break;
+        break; // Stop immediately at NEW ATTACK so no second attack is falsely inferred
       }
-
-      // Ignore buttons/headings
-      if (
-        line.length < 3 ||
-        up.includes('GYM') ||
-        up.includes('RAID') ||
-        up.includes('TRAINER') ||
-        up.includes('MEGA') ||
-        up.includes('EVOLVE') ||
-        up.includes('POWER UP') ||
-        up.includes('STARDUST') ||
-        up.includes('CANDY')
-      ) {
-        continue;
+      if (line.length >= 3 && !up.includes('GYM') && !up.includes('RAID')) {
+        moveAreaLines.push(line);
       }
-
-      validMoveLines.push(line);
-      // Allow up to 3 moves (1 Fast + 2 Charged)
-      if (validMoveLines.length >= 3) break;
     }
 
+    // 3. Match against official moves dictionary
+    const recognizedMoves = [];
+    for (let raw of moveAreaLines) {
+      const matched = matchNearestMove(raw);
+      if (matched && !recognizedMoves.includes(matched)) {
+        recognizedMoves.push(matched);
+      }
+    }
+
+    const fast = recognizedMoves[0] || '';
+    const chargedList = recognizedMoves.slice(1);
+
     return {
-      fast: validMoveLines[0] ? matchNearestMove(validMoveLines[0]) : '',
-      // Joins dual moves into "Hydro Pump / Outrage"
-      charged: validMoveLines.slice(1).map(matchNearestMove).filter(Boolean).join(' / ')
+      fast: fast,
+      charged: chargedList.join(' / ')
     };
   };
 
