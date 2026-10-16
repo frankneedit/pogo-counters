@@ -507,9 +507,19 @@ const extractMovesFromCanvas = async (worker, canvas) => {
     };
   };
 
-  const handleFilesSelected = async (e) => {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
+  const handleFilesSelected = async (eventOrFiles) => {
+    // 1. Safe extraction of files regardless of how the handler was triggered
+    let fileList = [];
+
+    if (eventOrFiles instanceof FileList || Array.isArray(eventOrFiles)) {
+      fileList = Array.from(eventOrFiles);
+    } else if (eventOrFiles?.target?.files) {
+      fileList = Array.from(eventOrFiles.target.files);
+    } else if (eventOrFiles?.dataTransfer?.files) {
+      fileList = Array.from(eventOrFiles.dataTransfer.files);
+    }
+
+    if (!fileList || fileList.length === 0) return;
 
     setIsProcessing(true);
     setStatusMsg("Loading screenshots...");
@@ -517,18 +527,17 @@ const extractMovesFromCanvas = async (worker, canvas) => {
     try {
       const worker = await createWorker('eng');
 
-      // Initialize loadedScreens array
       const loadedScreens = await Promise.all(
-        files.map(file => {
-          return new Promise((resolve) => {
+        fileList.map((file) => {
+          return new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = (ev) => resolve(ev.target.result);
+            reader.onerror = reject;
             reader.readAsDataURL(file);
           });
         })
       );
 
-      // Current record setup
       let current = activeRecord ? { ...activeRecord } : {
         id: 'poke_' + Date.now(),
         name: '',
@@ -560,11 +569,10 @@ const extractMovesFromCanvas = async (worker, canvas) => {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0);
 
-        // Detect if it is an Appraisal screen (contains 3-star badge or leader portrait)
         const isAppraisal = checkIfAppraisalScreen(canvas);
 
         if (isAppraisal) {
-          setStatusMsg(`Analyzing Appraisal (${i + 1}/${loadedScreens.length})...`);
+          setStatusMsg(`Analyzing Appraisal Screen (${i + 1}/${loadedScreens.length})...`);
           const ivs = analyzeIVBars(canvas);
 
           // CP Detection
@@ -597,7 +605,6 @@ const extractMovesFromCanvas = async (worker, canvas) => {
           const nameRes = await worker.recognize(nameCanvas);
           const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
 
-          // Debug preview thumbnail
           if (ivs.debugCardBox) {
             const box = ivs.debugCardBox;
             const debugCanvas = document.createElement('canvas');
@@ -628,8 +635,7 @@ const extractMovesFromCanvas = async (worker, canvas) => {
           if (cpMatch) current.cp = parseInt(cpMatch[0], 10);
           current.screenshot = dataUrl;
         } else {
-          // Moveset screen
-          setStatusMsg(`Analyzing Moveset (${i + 1}/${loadedScreens.length})...`);
+          setStatusMsg(`Analyzing Moveset Screen (${i + 1}/${loadedScreens.length})...`);
           current.fastMove = '';
           current.chargedMove = '';
           const moves = await extractMovesFromCanvas(worker, canvas);
@@ -640,7 +646,6 @@ const extractMovesFromCanvas = async (worker, canvas) => {
 
       await worker.terminate();
 
-      // Open verification modal with scanned data
       setScannedPokemon(current);
       setShowVerifyModal(true);
     } catch (error) {
@@ -649,8 +654,9 @@ const extractMovesFromCanvas = async (worker, canvas) => {
     } finally {
       setIsProcessing(false);
       setStatusMsg("");
-      // Reset input value so re-selecting same files triggers change event
-      e.target.value = "";
+      if (eventOrFiles?.target) {
+        eventOrFiles.target.value = "";
+      }
     }
   };
 
