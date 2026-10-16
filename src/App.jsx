@@ -256,15 +256,40 @@ export default function App() {
     const W = canvas.width;
     const H = canvas.height;
 
+    // 1. Locate the Gold/Orange Star Appraisal Badge on the left
+    let badgeBottomY = -1;
+    let badgeCenterX = Math.round(W * 0.15);
+
+    // Scan down through the badge area (55% to 75% height)
+    for (let y = Math.round(H * 0.72); y >= Math.round(H * 0.58); y -= 2) {
+      const p = ctx.getImageData(badgeCenterX, y, 1, 1).data;
+      const [h, s, l] = rgbToHsl(p[0], p[1], p[2]);
+      // Gold badge color
+      if (h >= 24 && h <= 50 && s >= 40 && l >= 35 && l <= 85) {
+        badgeBottomY = y;
+        break;
+      }
+    }
+
+    // Anchor the top of the white card directly from badge position or fallback
+    const cardTop = badgeBottomY !== -1 
+      ? badgeBottomY + Math.round(H * 0.015) 
+      : Math.round(H * 0.735);
+
+    // The horizontal bar bounds (11.8% to 45.6% of screen width)
     const startX = Math.round(W * 0.118);
     const endX = Math.round(W * 0.456);
     const totalBarWidth = endX - startX;
 
-    // Calibrated Y-percentages across devices and Dynamax UI shifts
-    const barYPercentages = [0.752, 0.798, 0.842];
+    // Relative vertical offsets for Attack, Defense, HP rows below the card top
+    const barOffsets = [
+      Math.round(H * 0.042), // Attack bar center
+      Math.round(H * 0.086), // Defense bar center
+      Math.round(H * 0.128)  // HP bar center
+    ];
 
-    const ivs = barYPercentages.map((yPct) => {
-      const yCenter = Math.round(H * yPct);
+    const ivs = barOffsets.map((offsetY) => {
+      const yCenter = cardTop + offsetY;
       let filledPixels = 0;
       let coralRedPixels = 0;
       const offsets = [-3, -1, 0, 1, 3];
@@ -278,8 +303,10 @@ export default function App() {
           const [r, g, b] = [pixel[0], pixel[1], pixel[2]];
           const [h, s, l] = rgbToHsl(r, g, b);
 
+          // Orange bar fill
           const isOrange = (h >= 16 && h <= 55 && s >= 30 && l >= 25 && l <= 85);
-          const isCoralRed = ((h >= 340 || h <= 15) && s >= 28 && l >= 35 && l <= 80 && r > g + 20);
+          // Maxed coral-pink/red fill (15)
+          const isCoralRed = ((h >= 340 || h <= 15) && s >= 25 && l >= 30 && l <= 82 && r > g + 20);
 
           if (isCoralRed) {
             isRed = true;
@@ -294,6 +321,7 @@ export default function App() {
         if (isRed) coralRedPixels++;
       }
 
+      // If coral red dominates, snap to 15
       if (coralRedPixels > totalBarWidth * 0.40) {
         return 15;
       }
@@ -305,22 +333,28 @@ export default function App() {
     return {
       atk: ivs[0] ?? 0,
       def: ivs[1] ?? 0,
-      hp: ivs[2] ?? 0
+      hp: ivs[2] ?? 0,
+      debugCardBox: {
+        x: Math.round(W * 0.06),
+        y: cardTop,
+        w: Math.round(W * 0.45),
+        h: Math.round(H * 0.16)
+      }
     };
   };
 
  const extractMovesFromCanvas = async (worker, canvas) => {
-    // 1. Position crop higher to capture standard attacks before Max Moves
-    const mY = Math.round(canvas.height * 0.48);
-    const mW = Math.round(canvas.width * 0.88);
-    const mH = Math.round(canvas.height * 0.38);
+    // Crop lower section containing tabs and moves
+    const mY = Math.round(canvas.height * 0.52);
+    const mW = Math.round(canvas.width * 0.90);
+    const mH = Math.round(canvas.height * 0.40);
 
     const moveCanvas = document.createElement('canvas');
     moveCanvas.width = mW;
     moveCanvas.height = mH;
     moveCanvas.getContext('2d').drawImage(
       canvas,
-      Math.round(canvas.width * 0.06),
+      Math.round(canvas.width * 0.05),
       mY,
       mW, mH, 0, 0, mW, mH
     );
@@ -328,55 +362,52 @@ export default function App() {
     const moveRes = await worker.recognize(moveCanvas);
     const rawLines = moveRes.data.lines.map(l => l.text.trim());
 
-    // 2. Start right after the "GYMS & RAIDS" / "TRAINER BATTLES" tab
+    // 1. Locate GYMS & RAIDS
     let startIdx = rawLines.findIndex(t => {
       const up = t.toUpperCase();
       return up.includes('GYM') || up.includes('RAID') || up.includes('TRAINER');
     });
+
     const linesAfterTab = startIdx !== -1 ? rawLines.slice(startIdx + 1) : rawLines;
 
-    // 3. Stop BEFORE "NEW ATTACK", "MAX MOVES", trade details, or catch info
-    let endIdx = linesAfterTab.findIndex(t => {
-      const up = t.toUpperCase();
-      return (
+    // 2. Filter out non-move UI lines (Power Up, Mega, Max, Trade, Buttons)
+    const validMoveLines = [];
+    for (let line of linesAfterTab) {
+      const up = line.toUpperCase();
+      
+      // Stop before bottom buttons or metadata
+      if (
         up.includes('NEW ATTACK') || 
         up.includes('MAX MOVE') || 
-        up.includes('MAX ROCKFALL') ||
-        up.includes('MAX GUARD') ||
-        up.includes('MAX SPIRIT') ||
-        up.includes('LOCKED') ||
-        up.includes('LEVEL') ||
         up.includes('OBTAINED') || 
-        up.includes('TRADE') ||
-        up.includes('CAUGHT')
-      );
-    });
-    const moveAreaLines = endIdx !== -1 ? linesAfterTab.slice(0, endIdx) : linesAfterTab;
+        up.includes('CAUGHT') ||
+        up.includes('WALKED')
+      ) {
+        break;
+      }
 
-    // 4. Extract and clean the move candidates
-    const candidateLines = moveAreaLines
-      .map(t => t.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim())
-      .filter(t => {
-        const up = t.toUpperCase();
-        return (
-          t.length >= 3 &&
-          !up.includes('GYM') &&
-          !up.includes('RAID') &&
-          !up.includes('TRAINER') &&
-          !up.includes('BATTLE') &&
-          !up.includes('STARDUST') &&
-          !up.includes('CANDY') &&
-          !up.includes('POWER UP') &&
-          !up.includes('PRIMAL') &&
-          !up.includes('REVERSION') &&
-          !up.includes('MAX') &&
-          !up.includes('LOCKED')
-        );
-      });
+      // Ignore buttons/headings
+      if (
+        line.length < 3 ||
+        up.includes('GYM') ||
+        up.includes('RAID') ||
+        up.includes('TRAINER') ||
+        up.includes('MEGA') ||
+        up.includes('EVOLVE') ||
+        up.includes('POWER UP') ||
+        up.includes('STARDUST') ||
+        up.includes('CANDY')
+      ) {
+        continue;
+      }
+
+      validMoveLines.push(line);
+      if (validMoveLines.length >= 2) break;
+    }
 
     return {
-      fast: candidateLines[0] ? matchNearestMove(candidateLines[0]) : '',
-      charged: candidateLines[1] ? matchNearestMove(candidateLines[1]) : ''
+      fast: validMoveLines[0] ? matchNearestMove(validMoveLines[0]) : '',
+      charged: validMoveLines[1] ? matchNearestMove(validMoveLines[1]) : ''
     };
   };
 
@@ -469,16 +500,16 @@ export default function App() {
           // Shifted Y from 0.75 down to 0.725 and widened slightly to center Attack, Defense, and HP
           const dW = Math.round(canvas.width * 0.44);
           const dH = Math.round(canvas.height * 0.16);
+          const box = ivs.debugCardBox;
           const debugCanvas = document.createElement('canvas');
-          debugCanvas.width = dW;
-          debugCanvas.height = dH;
+          debugCanvas.width = box.w;
+          debugCanvas.height = box.h;
           debugCanvas.getContext('2d').drawImage(
             canvas,
-            Math.round(canvas.width * 0.08),
-            Math.round(canvas.height * 0.725),
-            dW, dH, 0, 0, dW, dH
+            box.x, box.y, box.w, box.h,
+            0, 0, box.w, box.h
           );
-          setDebugCropUrl(debugCanvas.toDataURL());
+          setDebugCropUrl(debugCanvas.toDataURL()); 
 
           const totalIv = ivs.atk + ivs.def + ivs.hp;
           current.atk = ivs.atk;
