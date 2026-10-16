@@ -322,31 +322,37 @@ const checkIfAppraisalScreen = (canvas) => {
     const W = canvas.width;
     const H = canvas.height;
 
-    // 1. Appraisal screens always have the solid white bottom speech bubble strip
-    // Sample along the bottom center (Y ~ 88% - 94%, X ~ 50%)
-    let whitePixelCount = 0;
-    const probeX = Math.round(W * 0.50);
-    const startY = Math.round(H * 0.88);
-    const endY = Math.round(H * 0.94);
+    // 1. Look for the green POWER UP button (Present ONLY on Moveset/Profile screen)
+    // The green button is centered around X: 15% - 45%, Y: 56% - 63%
+    let hasGreenPowerUpButton = false;
+    for (let x = Math.round(W * 0.15); x <= Math.round(W * 0.40); x += 10) {
+      for (let y = Math.round(H * 0.56); y <= Math.round(H * 0.64); y += 6) {
+        const p = ctx.getImageData(x, y, 1, 1).data;
+        const [h, s, l] = rgbToHsl(p[0], p[1], p[2]);
+        // Distinct Pokémon GO button green (Hue 120-165, Saturation > 35)
+        if (h >= 120 && h <= 170 && s >= 35 && l >= 35 && l <= 85) {
+          hasGreenPowerUpButton = true;
+          break;
+        }
+      }
+      if (hasGreenPowerUpButton) break;
+    }
 
-    for (let y = startY; y <= endY; y += 2) {
+    if (hasGreenPowerUpButton) {
+      return false; // Definitely a MOVESET / Profile screen!
+    }
+
+    // 2. Appraisal screen has the Leader's speech bubble at the bottom (solid white at 90% - 95% height)
+    let whiteBubbleCount = 0;
+    const probeX = Math.round(W * 0.50);
+    for (let y = Math.round(H * 0.90); y <= Math.round(H * 0.96); y += 2) {
       const p = ctx.getImageData(probeX, y, 1, 1).data;
-      if (p[0] >= 235 && p[1] >= 235 && p[2] >= 235) {
-        whitePixelCount++;
+      if (p[0] >= 240 && p[1] >= 240 && p[2] >= 240) {
+        whiteBubbleCount++;
       }
     }
 
-    // 2. Also check if the Team Leader appraisal star badge area (X ~ 12-16%, Y ~ 62-72%) has non-white content
-    const badgeX = Math.round(W * 0.14);
-    const badgeY = Math.round(H * 0.67);
-    const badgePixel = ctx.getImageData(badgeX, badgeY, 1, 1).data;
-    const [h, s, l] = rgbToHsl(badgePixel[0], badgePixel[1], badgePixel[2]);
-
-    // Badge is present if we detect gold/orange/pink hues or if the bottom speech bubble is white
-    const hasBadgeColor = ((h >= 15 && h <= 55) || (h >= 330 || h <= 15)) && s >= 20;
-    const hasWhiteBubble = whitePixelCount >= 8;
-
-    return hasBadgeColor || hasWhiteBubble;
+    return whiteBubbleCount >= 10;
   };
   // 1. In analyzeIVBars: shifted slightly upward to center Attack, Defense, and HP
  const analyzeIVBars = (canvas) => {
@@ -557,16 +563,35 @@ const extractMovesFromCanvas = async (worker, canvas) => {
     try {
       const worker = await createWorker('eng');
 
-      const loadedScreens = await Promise.all(
+      // 2. Preload all selected images and initialize their canvases
+      const parsedImages = await Promise.all(
         fileList.map((file) => {
           return new Promise((resolve, reject) => {
             const reader = new FileReader();
-            reader.onload = (ev) => resolve(ev.target.result);
+            reader.onload = (ev) => {
+              const img = new Image();
+              img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.naturalWidth || img.width;
+                canvas.height = img.naturalHeight || img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+
+                // Identify screen type upfront
+                const isAppraisal = checkIfAppraisalScreen(canvas);
+                resolve({ canvas, dataUrl: ev.target.result, isAppraisal });
+              };
+              img.onerror = reject;
+              img.src = ev.target.result;
+            };
             reader.onerror = reject;
             reader.readAsDataURL(file);
           });
         })
       );
+
+      // 3. Guarantee Appraisal screens are processed FIRST (isAppraisal = true first)
+      parsedImages.sort((a, b) => (b.isAppraisal ? 1 : 0) - (a.isAppraisal ? 1 : 0));
 
       let current = activeRecord ? { ...activeRecord } : {
         id: 'poke_' + Date.now(),
@@ -584,25 +609,11 @@ const extractMovesFromCanvas = async (worker, canvas) => {
         createdAt: Date.now()
       };
 
-      for (let i = 0; i < loadedScreens.length; i++) {
-        const dataUrl = loadedScreens[i];
-        const img = new Image();
-        img.src = dataUrl;
-        await new Promise((resolve, reject) => {
-          img.onload = resolve;
-          img.onerror = reject;
-        });
-
-        const canvas = document.createElement('canvas');
-        canvas.width = img.naturalWidth || img.width;
-        canvas.height = img.naturalHeight || img.height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0);
-
-        const isAppraisal = checkIfAppraisalScreen(canvas);
+      for (let i = 0; i < parsedImages.length; i++) {
+        const { canvas, dataUrl, isAppraisal } = parsedImages[i];
 
         if (isAppraisal) {
-          setStatusMsg(`Analyzing Appraisal Screen (${i + 1}/${loadedScreens.length})...`);
+          setStatusMsg(`Analyzing Appraisal Screen (${i + 1}/${parsedImages.length})...`);
           const ivs = analyzeIVBars(canvas);
 
           // CP Detection
@@ -635,6 +646,7 @@ const extractMovesFromCanvas = async (worker, canvas) => {
           const nameRes = await worker.recognize(nameCanvas);
           const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
 
+          // Set thumbnail preview
           if (ivs.debugCardBox) {
             const box = ivs.debugCardBox;
             const debugCanvas = document.createElement('canvas');
@@ -665,7 +677,8 @@ const extractMovesFromCanvas = async (worker, canvas) => {
           if (cpMatch) current.cp = parseInt(cpMatch[0], 10);
           current.screenshot = dataUrl;
         } else {
-          setStatusMsg(`Analyzing Moveset Screen (${i + 1}/${loadedScreens.length})...`);
+          // Moveset Screen
+          setStatusMsg(`Analyzing Moveset Screen (${i + 1}/${parsedImages.length})...`);
           current.fastMove = '';
           current.chargedMove = '';
           const moves = await extractMovesFromCanvas(worker, canvas);
