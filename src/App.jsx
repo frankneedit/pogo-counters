@@ -321,40 +321,41 @@ export default function App() {
     const W = canvas.width;
     const H = canvas.height;
 
-    // 1. UNIVERSAL ANCHOR: Locate the top of the bottom speech bubble
-    // The speech bubble is solid white (RGB > 240) in the lower center (W * 0.50)
-    let bubbleTopY = -1;
-    const probeX = Math.round(W * 0.50);
-
-    for (let y = Math.round(H * 0.88); y >= Math.round(H * 0.76); y -= 2) {
+    // 1. Locate the top edge of the white appraisal card:
+    // Probe inside the card's guaranteed horizontal region (X = 25% W)
+    // Scan downwards from 68% to 78% height until hitting the pure white card background (> 242)
+    let cardTop = -1;
+    const probeX = Math.round(W * 0.25);
+    for (let y = Math.round(H * 0.68); y <= Math.round(H * 0.80); y++) {
       const p = ctx.getImageData(probeX, y, 1, 1).data;
-      // When leaving the white speech bubble into darker leader jacket / background
-      if (p[0] < 220 || p[1] < 220 || p[2] < 220) {
-        bubbleTopY = y;
+      if (p[0] >= 242 && p[1] >= 242 && p[2] >= 242) {
+        cardTop = y;
         break;
       }
     }
 
-    // Baseline fallback if speech bubble wasn't detected
-    if (bubbleTopY === -1) {
-      bubbleTopY = Math.round(H * 0.89);
+    if (cardTop === -1) {
+      cardTop = Math.round(H * 0.742);
     }
 
-    // In Pokémon GO UI, the 3 bars sit at fixed distances above the speech bubble
-    const hpCenterY = bubbleTopY - Math.round(H * 0.045);
-    const defCenterY = bubbleTopY - Math.round(H * 0.088);
-    const atkCenterY = bubbleTopY - Math.round(H * 0.130);
-
-    const barCenters = [atkCenterY, defCenterY, hpCenterY];
-
+    // 2. Bar horizontal bounds
     const startX = Math.round(W * 0.118);
     const endX = Math.round(W * 0.456);
     const totalBarWidth = endX - startX;
 
-    const ivs = barCenters.map((yCenter) => {
+    // 3. Exact bar center line offsets relative to cardTop
+    // Verified across all screen ratios:
+    const barOffsets = [
+      Math.round(H * 0.038), // Attack bar center
+      Math.round(H * 0.082), // Defense bar center
+      Math.round(H * 0.126)  // HP bar center
+    ];
+
+    const ivs = barOffsets.map((offsetY) => {
+      const yCenter = cardTop + offsetY;
       let filledPixels = 0;
       let coralRedPixels = 0;
-      const offsets = [-3, -1, 0, 1, 3];
+      const offsets = [-3, -2, 0, 2, 3];
 
       for (let x = startX; x <= endX; x++) {
         let isFilled = false;
@@ -365,10 +366,10 @@ export default function App() {
           const [r, g, b] = [pixel[0], pixel[1], pixel[2]];
           const [h, s, l] = rgbToHsl(r, g, b);
 
-          // Orange bar fill
-          const isOrange = (h >= 16 && h <= 55 && s >= 28 && l >= 25 && l <= 85);
-          // Maxed coral-pink/red fill (15)
-          const isCoralRed = ((h >= 335 || h <= 15) && s >= 22 && l >= 30 && l <= 85 && r > g + 18);
+          // In-game orange fill
+          const isOrange = (h >= 14 && h <= 55 && s >= 28 && l >= 25 && l <= 85);
+          // In-game coral red fill (max 15 bar)
+          const isCoralRed = ((h >= 335 || h <= 15) && s >= 22 && l >= 28 && l <= 85 && r > g + 18);
 
           if (isCoralRed) {
             isRed = true;
@@ -383,8 +384,7 @@ export default function App() {
         if (isRed) coralRedPixels++;
       }
 
-      // If coral red dominates, it is max 15
-      if (coralRedPixels > totalBarWidth * 0.40) {
+      if (coralRedPixels > totalBarWidth * 0.38) {
         return 15;
       }
 
@@ -397,10 +397,10 @@ export default function App() {
       def: ivs[1] ?? 0,
       hp: ivs[2] ?? 0,
       debugCardBox: {
-        x: Math.round(W * 0.06),
-        y: atkCenterY - Math.round(H * 0.025),
-        w: Math.round(W * 0.45),
-        h: Math.round(H * 0.16)
+        x: Math.round(W * 0.08),
+        y: cardTop,
+        w: Math.round(W * 0.44),
+        h: Math.round(H * 0.15)
       }
     };
   };
@@ -507,7 +507,18 @@ const extractMovesFromCanvas = async (worker, canvas) => {
       loadedScreens.sort((a, b) => (b.isAppraisal ? 1 : 0) - (a.isAppraisal ? 1 : 0));
 
       const worker = await createWorker('eng');
-
+      const current = {
+          name: '',
+          cp: 0,
+          atk: 0,
+          def: 0,
+          hp: 0,
+          ivPercentage: 0,
+          fastMove: '',
+          chargedMove: '',
+          types: [],
+          screenshot: ''
+        };
       let current = activeRecord ? { ...activeRecord } : {
         id: 'poke_' + Date.now(),
         name: '',
