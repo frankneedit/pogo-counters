@@ -113,20 +113,17 @@ const getSimilarity = (s1, s2) => {
 const matchNearestMove = (rawOcrText) => {
   if (!rawOcrText || rawOcrText.length < 3) return "";
 
-  // Strip numbers and non-letter symbols
-  const cleaned = rawOcrText.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim();
+  // Strip digits, punctuation, and slash/dash noise
+  const cleaned = rawOcrText.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, ' ').replace(/\s+/g, ' ').trim();
   const lowerCleaned = cleaned.toLowerCase();
 
   const movesToSearch = (liveMovesList && liveMovesList.length > 0) ? liveMovesList : FALLBACK_MOVES;
-
-  // 1. Sort candidate moves by length descending so "Discharge" matches before "Charge"
   const sortedMoves = [...movesToSearch].sort((a, b) => b.length - a.length);
 
+  // 1. Direct Substring Match (e.g. "Body Slam" inside "Body Slam    ")
   for (const move of sortedMoves) {
     const lowerMove = move.toLowerCase();
-    // Match exact word boundary or full prefix/contains
-    const regex = new RegExp(`\\b${lowerMove}\\b`, 'i');
-    if (regex.test(lowerCleaned) || lowerCleaned.startsWith(lowerMove)) {
+    if (lowerCleaned.includes(lowerMove)) {
       return move;
     }
   }
@@ -143,7 +140,7 @@ const matchNearestMove = (rawOcrText) => {
     }
   }
 
-  return highestScore >= 0.60 ? bestMatch : "";
+  return highestScore >= 0.55 ? bestMatch : "";
 };
 
 const getAllRecords = async () => {
