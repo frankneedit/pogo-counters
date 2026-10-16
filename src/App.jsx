@@ -48,7 +48,8 @@ const FALLBACK_MOVES = [
   "Ice Beam", "Blizzard", "Avalanche", "Stone Edge", "Rock Slide", 
   "Sludge Bomb", "Sludge Wave", "Gunk Shot", "Brave Bird", "Sky Attack", 
   "Hurricane", "Fly", "Aeroblast", "Sacred Fire",
-"Body Slam", "Zen Headbutt", "Lick", "Heavy Slam", "Superpower", "Hyper Beam"
+"Body Slam", "Zen Headbutt", "Lick", "Earthquake", "Superpower", "Heavy Slam", "Hyper Beam",
+  "Charm", "Dazzling Gleam", "Discharge", "Thunder Shock", "Dragon Tail", "Dragon Claw", "Hydro Pump", "Outrage", "Smack Down", "Stone Edge"
 ];
 
 // In-memory master list (starts with cached or fallback, updates live)
@@ -427,7 +428,8 @@ export default function App() {
     };
   };
 const extractMovesFromCanvas = async (worker, canvas) => {
-    const mY = Math.round(canvas.height * 0.50);
+    // 1. Crop moves section (capturing Fast Attack and Charged Attacks cleanly)
+    const mY = Math.round(canvas.height * 0.48);
     const mW = Math.round(canvas.width * 0.90);
     const mH = Math.round(canvas.height * 0.42);
 
@@ -444,6 +446,7 @@ const extractMovesFromCanvas = async (worker, canvas) => {
     const moveRes = await worker.recognize(moveCanvas);
     const rawLines = moveRes.data.lines.map(l => l.text.trim());
 
+    // 2. Locate the GYMS & RAIDS / TRAINER BATTLES tab
     let startIdx = rawLines.findIndex(t => {
       const up = t.toUpperCase();
       return up.includes('GYM') || up.includes('RAID') || up.includes('TRAINER');
@@ -451,10 +454,11 @@ const extractMovesFromCanvas = async (worker, canvas) => {
 
     const linesAfterTab = startIdx !== -1 ? rawLines.slice(startIdx + 1) : rawLines;
 
+    // 3. Stop strictly BEFORE the bottom buttons or metadata
     const moveAreaLines = [];
     for (let line of linesAfterTab) {
       const up = line.toUpperCase();
-       if (
+      if (
         up.includes('NEW ATTACK') || 
         up.includes('MAX MOVE') || 
         up.includes('OBTAINED') || 
@@ -466,6 +470,7 @@ const extractMovesFromCanvas = async (worker, canvas) => {
         break;
       }
 
+      // Filter non-move UI lines
       if (
         line.length < 3 ||
         up.includes('GYM') ||
@@ -485,6 +490,7 @@ const extractMovesFromCanvas = async (worker, canvas) => {
       moveAreaLines.push(line);
     }
 
+    // 4. Match against move list
     const recognizedMoves = [];
     for (let raw of moveAreaLines) {
       const matched = matchNearestMove(raw);
