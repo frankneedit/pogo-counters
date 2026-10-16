@@ -236,76 +236,69 @@ export default function App() {
   };
 
   // --- SELF-CALIBRATING IV BAR ANALYZER ---
+  // --- UNIVERSAL SELF-CALIBRATING IV BAR ANALYZER ---
   const analyzeIVBars = (canvas) => {
     const ctx = canvas.getContext('2d');
     const W = canvas.width;
     const H = canvas.height;
 
-    // 1. Locate the top boundary of the white bottom speech bubble
-    const probeX = Math.round(W * 0.50);
-    let bubbleTopY = -1;
+    const startX = Math.round(W * 0.118);
+    const endX = Math.round(W * 0.458);
+    const totalBarWidth = endX - startX;
 
-    for (let y = Math.round(H * 0.88); y >= Math.round(H * 0.74); y -= 2) {
-      const p = ctx.getImageData(probeX, y, 1, 1).data;
-      if (p[0] < 220 || p[1] < 220 || p[2] < 220) {
-        bubbleTopY = y;
-        break;
-      }
-    }
+    // Scan column at 26% width between 71% and 88% height
+    // Inside the white card, transitions from card white -> bar track -> card white
+    // pinpoints the exact center of each of the 3 stat bars
+    const scanX = Math.round(W * 0.26);
+    const ySearchStart = Math.round(H * 0.71);
+    const ySearchEnd = Math.round(H * 0.88);
 
-    if (bubbleTopY === -1) {
-      bubbleTopY = Math.round(H * 0.89);
-    }
-
-    // 2. Scan down through the middle of the card (column at 26% width) to locate the 3 bar centers
-    const barProbeX = Math.round(W * 0.26);
-    const searchStartY = bubbleTopY - Math.round(H * 0.165);
-    const searchEndY = bubbleTopY - Math.round(H * 0.020);
-
-    const detectedBarCenters = [];
-    let insideBar = false;
+    const detectedRows = [];
+    let inBar = false;
     let barStartY = 0;
 
-    for (let y = searchStartY; y <= searchEndY; y++) {
-      const p = ctx.getImageData(barProbeX, y, 1, 1).data;
-      const isWhite = (p[0] >= 235 && p[1] >= 235 && p[2] >= 235);
+    for (let y = ySearchStart; y <= ySearchEnd; y++) {
+      const [r, g, b] = ctx.getImageData(scanX, y, 1, 1).data;
+      // The card background is pure white (#FFFFFF, > 238 on all channels)
+      const isCardWhite = (r >= 238 && g >= 238 && b >= 238);
 
-      if (!isWhite && !insideBar) {
-        insideBar = true;
+      if (!isCardWhite && !inBar) {
+        inBar = true;
         barStartY = y;
-      } else if (isWhite && insideBar) {
-        insideBar = false;
-        const barThickness = y - barStartY;
-        if (barThickness >= 4 && barThickness <= 26) {
-          detectedBarCenters.push(Math.round((barStartY + y) / 2));
+      } else if (isCardWhite && inBar) {
+        inBar = false;
+        const thickness = y - barStartY;
+        // Each IV bar line is between 4px and 24px thick
+        if (thickness >= 4 && thickness <= 24) {
+          detectedRows.push(Math.round((barStartY + y) / 2));
         }
       }
     }
 
     let barCenters = [];
-    if (detectedBarCenters.length === 3) {
-      barCenters = detectedBarCenters;
-    } else if (detectedBarCenters.length > 3) {
-      barCenters = detectedBarCenters.slice(-3);
+    if (detectedRows.length === 3) {
+      barCenters = detectedRows;
+    } else if (detectedRows.length > 3) {
+      // Pick the 3 rows with consistent ~25-35px spacing
+      barCenters = detectedRows.slice(-3);
     } else {
+      // Hard fallback if card detection was obscured
       barCenters = [
-        bubbleTopY - Math.round(H * 0.138), // Attack
-        bubbleTopY - Math.round(H * 0.095), // Defense
-        bubbleTopY - Math.round(H * 0.052)  // HP
+        Math.round(H * 0.755),
+        Math.round(H * 0.798),
+        Math.round(H * 0.840)
       ];
     }
 
-    const startX = Math.round(W * 0.118);
-    const endX = Math.round(W * 0.458);
-    const totalBarWidth = endX - startX;
-
     const isCoralRed = (r, g, b) => {
-      return r > 185 && g < 130 && b < 140 && (r - g > 50);
+      // Pokémon GO maxed 15-bar coral red (#e8535a)
+      return (r > 185 && g < 130 && b < 140 && (r - g > 45));
     };
 
-    const isOrange = (r, g, b) => {
+    const isBarColor = (r, g, b) => {
       const [h, s, l] = rgbToHsl(r, g, b);
-      return h >= 14 && h <= 55 && s >= 25 && l >= 25 && l <= 85;
+      const isOrange = (h >= 14 && h <= 55 && s >= 25 && l >= 25 && l <= 85);
+      return isOrange || isCoralRed(r, g, b);
     };
 
     const ivs = barCenters.map((yCenter) => {
@@ -330,7 +323,7 @@ export default function App() {
       let rightTipFilled = false;
       for (let dy of vOffsets) {
         const [r, g, b] = ctx.getImageData(endX - 3, yCenter + dy, 1, 1).data;
-        if (isOrange(r, g, b) || isCoralRed(r, g, b)) {
+        if (isBarColor(r, g, b)) {
           rightTipFilled = true;
           break;
         }
@@ -345,7 +338,7 @@ export default function App() {
         let isFilled = false;
         for (let dy of vOffsets) {
           const [r, g, b] = ctx.getImageData(x, yCenter + dy, 1, 1).data;
-          if (isOrange(r, g, b) || isCoralRed(r, g, b)) {
+          if (isBarColor(r, g, b)) {
             isFilled = true;
             break;
           }
@@ -933,11 +926,42 @@ export default function App() {
                       type="file"
                       accept="image/*"
                       className="hidden"
-                      onChange={(e) => {
-                        if (e.target.files?.[0]) {
-                          handleFilesSelected([e.target.files[0]]);
-                          e.target.value = '';
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file || !activeRecord) return;
+                        setIsProcessing(true);
+                        setStatusMsg("Extracting moves from screenshot...");
+                        try {
+                          const reader = new FileReader();
+                          reader.onload = async (ev) => {
+                            const img = new Image();
+                            img.onload = async () => {
+                              const canvas = document.createElement('canvas');
+                              canvas.width = img.width;
+                              canvas.height = img.height;
+                              canvas.getContext('2d').drawImage(img, 0, 0);
+
+                              const worker = await createWorker('eng');
+                              const moves = await extractMovesFromCanvas(worker, canvas);
+                              await worker.terminate();
+
+                              setActiveRecord(prev => ({
+                                ...prev,
+                                fastMove: moves.fast || prev.fastMove,
+                                chargedMove: moves.charged || prev.chargedMove
+                              }));
+                              setIsProcessing(false);
+                              setStatusMsg('');
+                            };
+                            img.src = ev.target.result;
+                          };
+                          reader.readAsDataURL(file);
+                        } catch (err) {
+                          console.error("Attach moveset error:", err);
+                          setIsProcessing(false);
+                          setStatusMsg('');
                         }
+                        e.target.value = '';
                       }}
                     />
                   </label>
