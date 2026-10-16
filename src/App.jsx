@@ -246,66 +246,6 @@ export default function App() {
     const endX = Math.round(W * 0.458);
     const totalBarWidth = endX - startX;
 
-    // 1. Locate the top boundary of the WHITE appraisal card.
-    // Inside the white card, the background is pure white (all channels >= 240).
-    const probeX = Math.round(W * 0.28);
-    let cardTopY = -1;
-
-    for (let y = Math.round(H * 0.70); y <= Math.round(H * 0.82); y++) {
-      const [r, g, b] = ctx.getImageData(probeX, y, 1, 1).data;
-      if (r >= 240 && g >= 240 && b >= 240) {
-        // Confirm it's solid card white by checking 6px deeper
-        const [r2, g2, b2] = ctx.getImageData(probeX, y + 6, 1, 1).data;
-        if (r2 >= 240 && g2 >= 240 && b2 >= 240) {
-          cardTopY = y;
-          break;
-        }
-      }
-    }
-
-    if (cardTopY === -1) {
-      cardTopY = Math.round(H * 0.745);
-    }
-
-    // 2. Scan strictly INSIDE the white card (from cardTopY + 12px downwards)
-    // to detect the 3 dark/colored bar lines
-    const detectedRows = [];
-    let inBar = false;
-    let barStartY = 0;
-    const yScanEnd = Math.min(Math.round(H * 0.90), cardTopY + Math.round(H * 0.16));
-
-    for (let y = cardTopY + 12; y <= yScanEnd; y++) {
-      const [r, g, b] = ctx.getImageData(probeX, y, 1, 1).data;
-      const isWhite = (r >= 235 && g >= 235 && b >= 235);
-
-      if (!isWhite && !inBar) {
-        inBar = true;
-        barStartY = y;
-      } else if (isWhite && inBar) {
-        inBar = false;
-        const thickness = y - barStartY;
-        // Legitimate IV bar thickness is between 4px and 22px
-        if (thickness >= 4 && thickness <= 22) {
-          detectedRows.push(Math.round((barStartY + y) / 2));
-        }
-      }
-    }
-
-    let barCenters = [];
-    if (detectedRows.length === 3) {
-      barCenters = detectedRows;
-    } else if (detectedRows.length > 3) {
-      // If any extra row was caught, take the 3 closest to standard spacing (~35px)
-      barCenters = detectedRows.slice(0, 3);
-    } else {
-      // Standard geometry relative to cardTopY across all mobile aspect ratios
-      barCenters = [
-        cardTopY + Math.round(H * 0.038), // Attack bar
-        cardTopY + Math.round(H * 0.081), // Defense bar
-        cardTopY + Math.round(H * 0.124)  // HP bar
-      ];
-    }
-
     const isCoralRed = (r, g, b) => {
       return (r > 185 && g < 130 && b < 140 && (r - g > 45));
     };
@@ -316,10 +256,75 @@ export default function App() {
       return isOrange || isCoralRed(r, g, b);
     };
 
+    // 1. Find the 3 bar Y-coordinates by horizontal pixel density.
+    // Each of the 3 stat bars spans horizontally from ~12% to >20% width.
+    // Empty tracks are dark gray (l < 45), filled tracks are orange/red.
+    const isTrackPixel = (r, g, b) => {
+      const [h, s, l] = rgbToHsl(r, g, b);
+      const isColored = isBarColor(r, g, b);
+      const isGrayTrack = (l >= 20 && l <= 55 && s <= 20); // Unfilled dark track
+      return isColored || isGrayTrack;
+    };
+
+    const yStart = Math.round(H * 0.73);
+    const yEnd = Math.round(H * 0.88);
+    const rowCounts = [];
+
+    // Probe 30 pixels along the first section of the bar track
+    const probeXStart = Math.round(W * 0.14);
+    const probeXEnd = Math.round(W * 0.28);
+
+    for (let y = yStart; y <= yEnd; y++) {
+      let count = 0;
+      for (let x = probeXStart; x <= probeXEnd; x += 2) {
+        const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
+        if (isTrackPixel(r, g, b)) {
+          count++;
+        }
+      }
+      rowCounts.push({ y, count });
+    }
+
+    // Find local peaks in rowCounts (representing the center of each bar)
+    const threshold = ((probeXEnd - probeXStart) / 2) * 0.55;
+    const peaks = [];
+    let inPeak = false;
+    let peakStartY = 0;
+
+    for (let i = 0; i < rowCounts.length; i++) {
+      const { y, count } = rowCounts[i];
+      if (count >= threshold && !inPeak) {
+        inPeak = true;
+        peakStartY = y;
+      } else if (count < threshold && inPeak) {
+        inPeak = false;
+        const thickness = y - peakStartY;
+        if (thickness >= 4 && thickness <= 24) {
+          peaks.push(Math.round((peakStartY + y) / 2));
+        }
+      }
+    }
+
+    let barCenters = [];
+    if (peaks.length === 3) {
+      barCenters = peaks;
+    } else if (peaks.length > 3) {
+      // Pick the 3 peaks with ~35px spacing
+      barCenters = peaks.slice(0, 3);
+    } else {
+      // Fallback
+      barCenters = [
+        Math.round(H * 0.772),
+        Math.round(H * 0.814),
+        Math.round(H * 0.856)
+      ];
+    }
+
+    // 2. Scan each of the 3 validated bar rows
     const ivs = barCenters.map((yCenter) => {
       const vOffsets = [-5, -3, -1, 0, 1, 3, 5];
 
-      // A. Coral Red -> Guaranteed 15
+      // A. Coral Red check -> 15
       let redCount = 0;
       for (let x = startX; x <= endX; x += 2) {
         for (let dy of vOffsets) {
@@ -334,7 +339,7 @@ export default function App() {
         return 15;
       }
 
-      // B. Filled Right Tip -> Guaranteed 15
+      // B. Filled Right Tip check -> 15
       let rightTipFilled = false;
       for (let dy of vOffsets) {
         const [r, g, b] = ctx.getImageData(endX - 3, yCenter + dy, 1, 1).data;
@@ -347,7 +352,7 @@ export default function App() {
         return 15;
       }
 
-      // C. Count filled pixels (0 - 14)
+      // C. Count filled orange pixels (0 - 14)
       let filledPixels = 0;
       for (let x = startX; x <= endX; x++) {
         let isFilled = false;
@@ -365,13 +370,15 @@ export default function App() {
       return Math.min(14, Math.max(0, Math.round(ratio * 15)));
     });
 
+    const cropTop = barCenters[0] - Math.round(H * 0.035);
+
     return {
       atk: ivs[0] ?? 0,
       def: ivs[1] ?? 0,
       hp: ivs[2] ?? 0,
       debugCardBox: {
         x: Math.round(W * 0.07),
-        y: cardTopY,
+        y: cropTop,
         w: Math.round(W * 0.44),
         h: Math.round(H * 0.16)
       }
