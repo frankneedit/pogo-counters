@@ -111,37 +111,53 @@ const getSimilarity = (s1, s2) => {
 };
 
 const matchNearestMove = (rawOcrText) => {
-  if (!rawOcrText || rawOcrText.length < 3) return "";
+    if (!rawOcrText || rawOcrText.length < 3) return "";
 
-  // Strip digits, punctuation, and slash/dash noise
-  const cleaned = rawOcrText.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, ' ').replace(/\s+/g, ' ').trim();
-  const lowerCleaned = cleaned.toLowerCase();
+    // Remove non-alphabetic characters and excess whitespace
+    const cleaned = rawOcrText
+      .replace(/[^a-zA-Z\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
 
-  const movesToSearch = (liveMovesList && liveMovesList.length > 0) ? liveMovesList : FALLBACK_MOVES;
-  const sortedMoves = [...movesToSearch].sort((a, b) => b.length - a.length);
+    // Comprehensive fallback including Snorlax & common meta moves
+    const defaultMoves = [
+      "Body Slam", "Zen Headbutt", "Lick", "Earthquake", "Superpower", "Heavy Slam", "Hyper Beam", "Outrage",
+      "Charm", "Dazzling Gleam", "Shadow Ball", "Synchronoise", "Psychic",
+      "Counter", "Close Combat", "Cross Chop", "Dynamic Punch",
+      "Thunder Shock", "Discharge", "Wild Charge", "Thunderbolt",
+      "Dragon Breath", "Dragon Tail", "Dragon Claw", "Hydro Cannon", "Hydro Pump", "Surf"
+    ];
 
-  // 1. Direct Substring Match (e.g. "Body Slam" inside "Body Slam    ")
-  for (const move of sortedMoves) {
-    const lowerMove = move.toLowerCase();
-    if (lowerCleaned.includes(lowerMove)) {
-      return move;
+    const sourceList = (liveMovesList && liveMovesList.length > 0) ? liveMovesList : defaultMoves;
+
+    // Normalize comparison array to standard display strings (e.g., "body-slam" -> "Body Slam")
+    const formattedList = sourceList.map(m => {
+      if (m.includes('-')) {
+        return m.split('-').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ');
+      }
+      return m;
+    });
+
+    // 1. Direct Substring Match (longest moves first to avoid partial substring collisions)
+    const sorted = [...formattedList].sort((a, b) => b.length - a.length);
+    for (const move of sorted) {
+      const mLower = move.toLowerCase();
+      if (cleaned.includes(mLower)) {
+        return move;
+      }
     }
-  }
 
-  // 2. Fuzzy match fallback
-  let bestMatch = "";
-  let highestScore = 0;
-
-  for (const move of sortedMoves) {
-    const score = getSimilarity(cleaned, move);
-    if (score > highestScore) {
-      highestScore = score;
-      bestMatch = move;
+    // 2. Word Token Matching (catches "Body" and "Slam" if Tesseract broke them up)
+    for (const move of sorted) {
+      const parts = move.toLowerCase().split(' ');
+      if (parts.length > 1 && parts.every(part => cleaned.includes(part))) {
+        return move;
+      }
     }
-  }
 
-  return highestScore >= 0.55 ? bestMatch : "";
-};
+    return "";
+  };
 
 const getAllRecords = async () => {
   const { data, error } = await supabase
@@ -483,69 +499,55 @@ function rgbToHsl(r, g, b) {
   };
   
   const extractMovesFromCanvas = async (worker, canvas) => {
-    // 1. Crop moves section (capturing Fast Attack and Charged Attacks cleanly)
+    // 1. Cover from below the candy stats down through the move buttons (Y: 48% to 92%)
     const mY = Math.round(canvas.height * 0.48);
-    const mW = Math.round(canvas.width * 0.90);
-    const mH = Math.round(canvas.height * 0.42);
+    const mW = Math.round(canvas.width * 0.92);
+    const mH = Math.round(canvas.height * 0.44);
 
     const moveCanvas = document.createElement('canvas');
     moveCanvas.width = mW;
     moveCanvas.height = mH;
     moveCanvas.getContext('2d').drawImage(
       canvas,
-      Math.round(canvas.width * 0.05),
-      mY,
-      mW, mH, 0, 0, mW, mH
+      Math.round(canvas.width * 0.04), mY, mW, mH,
+      0, 0, mW, mH
     );
 
     const moveRes = await worker.recognize(moveCanvas);
-    const rawLines = moveRes.data.lines.map(l => l.text.trim());
+    const rawLines = (moveRes.data.text || '').split('\n').map(l => l.trim()).filter(Boolean);
 
-    // 2. Locate the GYMS & RAIDS / TRAINER BATTLES tab
-    let startIdx = rawLines.findIndex(t => {
-      const up = t.toUpperCase();
-      return up.includes('GYM') || up.includes('RAID') || up.includes('TRAINER');
-    });
-
-    const linesAfterTab = startIdx !== -1 ? rawLines.slice(startIdx + 1) : rawLines;
-
-    // 3. Stop strictly BEFORE the bottom buttons or metadata
+    // 2. Identify and collect potential move lines
     const moveAreaLines = [];
-    for (let line of linesAfterTab) {
-      const up = line.toUpperCase();
-      if (
-        up.includes('NEW ATTACK') || 
-        up.includes('MAX MOVE') || 
-        up.includes('OBTAINED') || 
-        up.includes('CAUGHT') ||
-        up.includes('WALKED') ||
-        up.includes('WEIGHT') ||
-        up.includes('HEIGHT')
-      ) {
-        break;
-      }
+    for (let rawLine of rawLines) {
+      const up = rawLine.toUpperCase();
 
-      // Filter non-move UI lines
+      // UI noise filters
       if (
-        line.length < 3 ||
-        up.includes('GYM') ||
-        up.includes('RAID') ||
-        up.includes('TRAINER') ||
-        up.includes('MEGA') ||
-        up.includes('EVOLVE') ||
+        rawLine.length < 3 ||
+        up.includes('GYMS') ||
+        up.includes('RAIDS') ||
+        up.includes('TRAINER BATTLES') ||
         up.includes('POWER UP') ||
+        up.includes('MEGA EVOLVE') ||
         up.includes('STARDUST') ||
         up.includes('CANDY') ||
         up.includes('WEATHER') ||
-        up.includes('BONUS')
+        up.includes('BONUS') ||
+        up.includes('MAX MOVES') ||
+        up.includes('WEIGHT') ||
+        up.includes('HEIGHT')
       ) {
         continue;
       }
 
-      moveAreaLines.push(line);
+      // If the line contains "NEW ATTACK" but ALSO contains a move name, strip "NEW ATTACK"
+      let cleaned = rawLine.replace(/NEW ATTACK/gi, '').replace(/\d+/g, '').trim();
+      if (cleaned.length >= 3) {
+        moveAreaLines.push(cleaned);
+      }
     }
 
-    // 4. Match against move list
+    // 3. Match recognized lines against known moves
     const recognizedMoves = [];
     for (let raw of moveAreaLines) {
       const matched = matchNearestMove(raw);
