@@ -32,12 +32,14 @@ const fetchPokemonTypesOnline = async (speciesName) => {
 };
 
 const KNOWN_MOVES = [
+  // Fast Moves
   "Mud Shot", "Metal Claw", "Dragon Tail", "Dragon Breath", "Counter", 
   "Shadow Claw", "Vine Whip", "Razor Leaf", "Water Gun", "Waterfall",
   "Fire Fang", "Fire Spin", "Incinerate", "Bullet Punch", "Snarl",
   "Bite", "Lick", "Psycho Cut", "Confusion", "Lock-On", "Thunder Shock",
   "Volt Switch", "Spark", "Poison Jab", "Hex", "Air Slash", "Wing Attack",
   "Gust", "Ice Shard", "Powder Snow", "Smack Down", "Rock Throw", "Mud-Slap",
+  "Charm", "Tackle", "Scratch", "Zen Headbutt", "Rollout", "Astonish",
   
   // Charged Moves
   "Earth Power", "Earthquake", "Draco Meteor", "Precipice Blades", "Roar of Time", "Iron Head",
@@ -48,8 +50,11 @@ const KNOWN_MOVES = [
   "Dark Pulse", "Foul Play", "Crunch", "Psychic", "Psyshock", "Moonblast",
   "Play Rough", "Dazzling Gleam", "Ice Beam", "Blizzard", "Avalanche",
   "Stone Edge", "Rock Slide", "Sludge Bomb", "Sludge Wave", "Gunk Shot",
-  "Brave Bird", "Sky Attack", "Hurricane", "Fly", "Aeroblast", "Sacred Fire"
+  "Brave Bird", "Sky Attack", "Hurricane", "Fly", "Aeroblast", "Sacred Fire",
+  "Body Slam", "Heavy Slam", "Hyper Beam", "Synchronoise", "Discharge", 
+  "Tri Attack", "Megahorn", "High Horsepower", "Hydro Pump", "Meteor Mash"
 ];
+
 const getSimilarity = (s1, s2) => {
   const str1 = s1.toLowerCase().trim();
   const str2 = s2.toLowerCase().trim();
@@ -79,6 +84,15 @@ const matchNearestMove = (rawOcrText) => {
   if (!rawOcrText || rawOcrText.length < 3) return "";
   const cleaned = rawOcrText.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim();
 
+  // 1. Direct case-insensitive substring search (prefer exact matches)
+  const lowerCleaned = cleaned.toLowerCase();
+  for (const move of KNOWN_MOVES) {
+    if (lowerCleaned.includes(move.toLowerCase()) || move.toLowerCase().includes(lowerCleaned)) {
+      return move;
+    }
+  }
+
+  // 2. Fuzzy match fallback
   let bestMatch = cleaned;
   let highestScore = 0;
 
@@ -89,7 +103,7 @@ const matchNearestMove = (rawOcrText) => {
       bestMatch = move;
     }
   }
-  return highestScore >= 0.55 ? bestMatch : cleaned;
+  return highestScore >= 0.55 ? bestMatch : "";
 };
 
 const getAllRecords = async () => {
@@ -185,129 +199,214 @@ export default function App() {
     return [h * 360, s * 100, l * 100];
   };
 
+  // --- RELIABLE SCREEN DETECTOR ---
   const checkIfAppraisal = (canvas) => {
     const ctx = canvas.getContext('2d');
     const W = canvas.width;
     const H = canvas.height;
-    let badgeGoldPixels = 0;
 
-    for (let y = Math.round(H * 0.62); y <= Math.round(H * 0.74); y += 3) {
-      for (let x = Math.round(W * 0.05); x <= Math.round(W * 0.25); x += 3) {
-        const pixel = ctx.getImageData(x, y, 1, 1).data;
-        const [h, s, l] = rgbToHsl(pixel[0], pixel[1], pixel[2]);
-        if (h >= 24 && h <= 50 && s >= 45 && l >= 35 && l <= 85) {
-          badgeGoldPixels++;
+    // 1. Look for the Green "POWER UP" button that exists ONLY on moveset/profile screens
+    // Located roughly X: 12% - 40%, Y: 48% - 62%
+    let greenButtonPixels = 0;
+    for (let x = Math.round(W * 0.12); x <= Math.round(W * 0.38); x += 8) {
+      for (let y = Math.round(H * 0.48); y <= Math.round(H * 0.62); y += 6) {
+        const p = ctx.getImageData(x, y, 1, 1).data;
+        const [h, s, l] = rgbToHsl(p[0], p[1], p[2]);
+        if (h >= 115 && h <= 170 && s >= 30 && l >= 30 && l <= 85) {
+          greenButtonPixels++;
         }
       }
     }
-    return badgeGoldPixels > 35;
+
+    if (greenButtonPixels >= 8) {
+      return false; // Found green Power Up button -> Moveset Screen!
+    }
+
+    // 2. Appraisal screens always have the solid white dialogue speech bubble at bottom center
+    let whiteBubblePixels = 0;
+    const probeX = Math.round(W * 0.50);
+    for (let y = Math.round(H * 0.90); y <= Math.round(H * 0.96); y += 2) {
+      const p = ctx.getImageData(probeX, y, 1, 1).data;
+      if (p[0] >= 235 && p[1] >= 235 && p[2] >= 235) {
+        whiteBubblePixels++;
+      }
+    }
+
+    return whiteBubblePixels >= 8;
   };
 
+  // --- UNIVERSAL IV ANALYZER (WORKS FOR 0, 1, 2, 3, AND 4-STAR HUNDOS) ---
   const analyzeIVBars = (canvas) => {
     const ctx = canvas.getContext('2d');
     const W = canvas.width;
     const H = canvas.height;
 
+    // 1. Anchor to the top edge of the white dialogue speech bubble at bottom center
+    const probeX = Math.round(W * 0.50);
+    let bubbleTopY = -1;
+
+    for (let y = Math.round(H * 0.88); y >= Math.round(H * 0.75); y -= 2) {
+      const p = ctx.getImageData(probeX, y, 1, 1).data;
+      // Leaving the white bubble into darker trainer coat
+      if (p[0] < 220 || p[1] < 220 || p[2] < 220) {
+        bubbleTopY = y;
+        break;
+      }
+    }
+
+    if (bubbleTopY === -1) {
+      bubbleTopY = Math.round(H * 0.89);
+    }
+
+    // Exact bar centerlines measured upward from the speech bubble baseline
+    const barCenters = [
+      bubbleTopY - Math.round(H * 0.138), // Attack bar
+      bubbleTopY - Math.round(H * 0.095), // Defense bar
+      bubbleTopY - Math.round(H * 0.052)  // HP bar
+    ];
+
     const startX = Math.round(W * 0.118);
-    const endX = Math.round(W * 0.456);
+    const endX = Math.round(W * 0.458);
     const totalBarWidth = endX - startX;
 
-    const barYPercentages = [0.776, 0.822, 0.864];
+    const isCoralRed = (r, g, b) => {
+      // Pokémon GO maxed 15-bar coral red color (#e8535a)
+      return r > 185 && g < 130 && b < 140 && (r - g > 50);
+    };
 
-    const ivs = barYPercentages.map((yPct) => {
-      const yCenter = Math.round(H * yPct);
-      let filledPixels = 0;
+    const isOrange = (r, g, b) => {
+      const [h, s, l] = rgbToHsl(r, g, b);
+      return h >= 14 && h <= 55 && s >= 25 && l >= 25 && l <= 85;
+    };
+
+    const ivs = barCenters.map((yCenter) => {
+      const vOffsets = [-5, -3, -1, 0, 1, 3, 5];
+
+      // A. Check for RED -> Instant 15!
       let redCount = 0;
-      const offsets = [-3, -1, 0, 1, 3];
+      for (let x = startX; x <= endX; x += 2) {
+        for (let dy of vOffsets) {
+          const [r, g, b] = ctx.getImageData(x, yCenter + dy, 1, 1).data;
+          if (isCoralRed(r, g, b)) {
+            redCount++;
+            break;
+          }
+        }
+      }
+      if (redCount >= totalBarWidth * 0.15) {
+        return 15;
+      }
 
+      // B. Check if right tip is filled (100% capacity) -> Instant 15!
+      let rightTipFilled = false;
+      for (let dy of vOffsets) {
+        const [r, g, b] = ctx.getImageData(endX - 3, yCenter + dy, 1, 1).data;
+        if (isOrange(r, g, b) || isCoralRed(r, g, b)) {
+          rightTipFilled = true;
+          break;
+        }
+      }
+      if (rightTipFilled) {
+        return 15;
+      }
+
+      // C. Count filled pixels from left to right (0 - 14)
+      let filledPixels = 0;
       for (let x = startX; x <= endX; x++) {
         let isFilled = false;
-        let isRed = false;
-
-        for (let dy of offsets) {
-          const pixel = ctx.getImageData(x, yCenter + dy, 1, 1).data;
-          const [r, g, b] = [pixel[0], pixel[1], pixel[2]];
-          const [h, s, l] = rgbToHsl(r, g, b);
-
-          const isOrange = (h >= 16 && h <= 55 && s >= 30 && l >= 25 && l <= 80);
-          const isCoralRed = (r > 195 && g < 110 && b < 130 && s >= 40);
-
-          if (isCoralRed) {
-            isRed = true;
-            isFilled = true;
-            break;
-          } else if (isOrange) {
+        for (let dy of vOffsets) {
+          const [r, g, b] = ctx.getImageData(x, yCenter + dy, 1, 1).data;
+          if (isOrange(r, g, b) || isCoralRed(r, g, b)) {
             isFilled = true;
             break;
           }
         }
         if (isFilled) filledPixels++;
-        if (isRed) redCount++;
-      }
-
-      // Only count as 15 if a dominant portion of the filled pixels is true coral red
-      if (redCount > totalBarWidth * 0.45) {
-        return 15;
       }
 
       const ratio = Math.min(1, Math.max(0, filledPixels / totalBarWidth));
-      return Math.min(15, Math.max(0, Math.round(ratio * 15)));
+      return Math.min(14, Math.max(0, Math.round(ratio * 15)));
     });
+
+    const cropTop = barCenters[0] - Math.round(H * 0.035);
 
     return {
       atk: ivs[0] ?? 0,
       def: ivs[1] ?? 0,
-      hp: ivs[2] ?? 0
+      hp: ivs[2] ?? 0,
+      debugCardBox: {
+        x: Math.round(W * 0.07),
+        y: cropTop,
+        w: Math.round(W * 0.44),
+        h: Math.round(H * 0.15)
+      }
     };
   };
+
+  // --- MOVESET EXTRACTOR (SUPPORTS WEATHER BONUS & 2 CHARGED ATTACKS) ---
   const extractMovesFromCanvas = async (worker, canvas) => {
-    const mW = Math.round(canvas.width * 0.88);
-    const mH = Math.round(canvas.height * 0.35);
+    // Crop strictly the left half (X: 10% to 65%) where move names live,
+    // avoiding the energy bars and damage numbers on the right
+    const cropX = Math.round(canvas.width * 0.10);
+    const cropW = Math.round(canvas.width * 0.55);
+    const cropY = Math.round(canvas.height * 0.50);
+    const cropH = Math.round(canvas.height * 0.40);
+
     const moveCanvas = document.createElement('canvas');
-    moveCanvas.width = mW;
-    moveCanvas.height = mH;
+    moveCanvas.width = cropW;
+    moveCanvas.height = cropH;
     moveCanvas.getContext('2d').drawImage(
       canvas,
-      Math.round(canvas.width * 0.06),
-      Math.round(canvas.height * 0.65),
-      mW, mH, 0, 0, mW, mH
+      cropX, cropY, cropW, cropH,
+      0, 0, cropW, cropH
     );
 
     const moveRes = await worker.recognize(moveCanvas);
-    const rawLines = moveRes.data.lines.map(l => l.text.trim());
+    const rawLines = (moveRes.data.text || '').split('\n').map(l => l.trim()).filter(Boolean);
 
-    let tabIndex = rawLines.findIndex(t => {
-      const up = t.toUpperCase();
-      return up.includes('GYM') || up.includes('RAID') || up.includes('TRAINER');
-    });
+    const candidates = [];
+    for (let line of rawLines) {
+      const up = line.toUpperCase();
+      if (
+        line.length < 3 ||
+        up.includes('GYMS') ||
+        up.includes('RAIDS') ||
+        up.includes('TRAINER') ||
+        up.includes('POWER UP') ||
+        up.includes('MEGA') ||
+        up.includes('EVOLVE') ||
+        up.includes('WEATHER') ||
+        up.includes('BONUS') ||
+        up.includes('MAX') ||
+        up.includes('STARDUST') ||
+        up.includes('CANDY') ||
+        up.includes('WEIGHT') ||
+        up.includes('HEIGHT')
+      ) {
+        continue;
+      }
 
-    const candidateLines = (tabIndex !== -1 ? rawLines.slice(tabIndex + 1) : rawLines)
-      .filter(t => {
-        const up = t.toUpperCase();
-        return (
-          t.length >= 3 &&
-          !up.includes('GYM') &&
-          !up.includes('RAID') &&
-          !up.includes('TRAINER') &&
-          !up.includes('BATTLE') &&
-          !up.includes('STARDUST') &&
-          !up.includes('CANDY') &&
-          !up.includes('POWER') &&
-          !up.includes('NEW ATTACK') &&
-          !up.includes('PRIMAL') &&
-          !up.includes('REVERSION') &&
-          !up.includes('OBTAINED') &&
-          !up.includes('TRADE') &&
-          !up.includes('CAUGHT')
-        );
-      });
+      const cleaned = line.replace(/NEW ATTACK/gi, '').replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim();
+      if (cleaned.length >= 3) {
+        candidates.push(cleaned);
+      }
+    }
+
+    const recognizedMoves = [];
+    for (let c of candidates) {
+      const matched = matchNearestMove(c);
+      if (matched && !recognizedMoves.includes(matched)) {
+        recognizedMoves.push(matched);
+      }
+    }
 
     return {
-      fast: candidateLines[0] ? matchNearestMove(candidateLines[0]) : '',
-      charged: candidateLines[1] ? matchNearestMove(candidateLines[1]) : ''
+      fast: recognizedMoves[0] || '',
+      charged: recognizedMoves.slice(1).join(' / ')
     };
   };
 
+  // --- SAFE FILE PIPELINE WITH AUTO-SORT ---
   const handleFilesSelected = async (fileList) => {
     if (!fileList || fileList.length === 0) return;
     setIsProcessing(true);
@@ -336,11 +435,15 @@ export default function App() {
         loadedScreens.push({ canvas, dataUrl, isAppraisal });
       }
 
+      // Guarantee Appraisal screen runs FIRST (isAppraisal = true first)
       loadedScreens.sort((a, b) => (b.isAppraisal ? 1 : 0) - (a.isAppraisal ? 1 : 0));
 
       const worker = await createWorker('eng');
 
-      let current = activeRecord ? { ...activeRecord } : {
+      // Only inherit activeRecord if the user explicitly clicked "+ Attach Moveset Pic" inside an open modal
+      const isAttachingMoveset = isModalOpen && activeRecord && loadedScreens.length === 1 && !loadedScreens[0].isAppraisal;
+
+      let current = isAttachingMoveset ? { ...activeRecord } : {
         id: 'poke_' + Date.now(),
         name: '',
         cp: 0,
@@ -363,6 +466,7 @@ export default function App() {
           setStatusMsg(`Analyzing Appraisal Screen (${i + 1}/${loadedScreens.length})...`);
           const ivs = analyzeIVBars(canvas);
 
+          // CP Detection (at top: CP XXXX)
           const cpW = Math.round(canvas.width * 0.45);
           const cpH = Math.round(canvas.height * 0.08);
           const cpCanvas = document.createElement('canvas');
@@ -377,6 +481,7 @@ export default function App() {
           const cpRes = await worker.recognize(cpCanvas);
           const cpMatch = cpRes.data.text.match(/\d{3,4}/);
 
+          // Name Detection (on white card: e.g. Gardevoir, Snorlax, Mewtwo)
           const nW = Math.round(canvas.width * 0.6);
           const nH = Math.round(canvas.height * 0.06);
           const nameCanvas = document.createElement('canvas');
@@ -391,18 +496,19 @@ export default function App() {
           const nameRes = await worker.recognize(nameCanvas);
           const cleanName = nameRes.data.text.replace(/[^a-zA-Z]/g, '').trim();
 
-          const dW = Math.round(canvas.width * 0.40);
-          const dH = Math.round(canvas.height * 0.14);
-          const debugCanvas = document.createElement('canvas');
-          debugCanvas.width = dW;
-          debugCanvas.height = dH;
-          debugCanvas.getContext('2d').drawImage(
-            canvas,
-            Math.round(canvas.width * 0.10),
-            Math.round(canvas.height * 0.75),
-            dW, dH, 0, 0, dW, dH
-          );
-          setDebugCropUrl(debugCanvas.toDataURL());
+          // Debug preview crop
+          if (ivs.debugCardBox) {
+            const box = ivs.debugCardBox;
+            const debugCanvas = document.createElement('canvas');
+            debugCanvas.width = box.w;
+            debugCanvas.height = box.h;
+            debugCanvas.getContext('2d').drawImage(
+              canvas,
+              box.x, box.y, box.w, box.h,
+              0, 0, box.w, box.h
+            );
+            setDebugCropUrl(debugCanvas.toDataURL());
+          }
 
           const totalIv = ivs.atk + ivs.def + ivs.hp;
           current.atk = ivs.atk;
@@ -418,7 +524,10 @@ export default function App() {
           if (cpMatch) current.cp = parseInt(cpMatch[0], 10);
           current.screenshot = dataUrl;
         } else {
+          // Moveset Screen
           setStatusMsg(`Analyzing Moveset Screen (${i + 1}/${loadedScreens.length})...`);
+          current.fastMove = '';
+          current.chargedMove = '';
           const moves = await extractMovesFromCanvas(worker, canvas);
           if (moves.fast) current.fastMove = moves.fast;
           if (moves.charged) current.chargedMove = moves.charged;
@@ -439,6 +548,7 @@ export default function App() {
       setIsModalOpen(true);
     } catch (err) {
       console.error('Scan error:', err);
+      alert('Scan error: ' + (err.message || err));
     } finally {
       setIsProcessing(false);
       setStatusMsg('');
@@ -688,7 +798,6 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Open Analysis Modal */}
                 <button
                   onClick={() => setDetailsRecord(item)}
                   className="w-full mt-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700/80 text-xs font-semibold text-cyan-400 border border-slate-700 transition-all active:scale-[0.98]"
@@ -710,13 +819,11 @@ export default function App() {
         </div>
       </main>
 
-      {/* SEPARATE MODAL COMPONENT */}
       <AnalysisModal 
         pokemon={detailsRecord} 
         onClose={() => setDetailsRecord(null)} 
       />
 
-      {/* VERIFY / EDIT MODAL */}
       {isModalOpen && activeRecord && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
