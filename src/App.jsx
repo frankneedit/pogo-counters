@@ -320,36 +320,37 @@ export default function App() {
     const W = canvas.width;
     const H = canvas.height;
 
-    // 1. Locate the Gold/Orange Star Appraisal Badge on the left
+    // 1. Locate the 3-Star Badge on the left (Supports both Gold and Pink Hundo badges)
     let badgeBottomY = -1;
-    let badgeCenterX = Math.round(W * 0.15);
+    let badgeCenterX = Math.round(W * 0.14);
 
-    // Scan down through the badge area (55% to 75% height)
-    for (let y = Math.round(H * 0.72); y >= Math.round(H * 0.58); y -= 2) {
+    for (let y = Math.round(H * 0.74); y >= Math.round(H * 0.58); y -= 2) {
       const p = ctx.getImageData(badgeCenterX, y, 1, 1).data;
       const [h, s, l] = rgbToHsl(p[0], p[1], p[2]);
-      // Gold badge color
-      if (h >= 24 && h <= 50 && s >= 40 && l >= 35 && l <= 85) {
+      
+      // Standard Gold badge OR Pink 100% IV Hundo badge
+      const isGoldBadge = (h >= 24 && h <= 50 && s >= 35 && l >= 35 && l <= 85);
+      const isPinkHundoBadge = ((h >= 335 || h <= 15) && s >= 30 && l >= 45 && l <= 85);
+
+      if (isGoldBadge || isPinkHundoBadge) {
         badgeBottomY = y;
         break;
       }
     }
 
-    // Anchor the top of the white card directly from badge position or fallback
+    // Anchor white appraisal box top edge
     const cardTop = badgeBottomY !== -1 
       ? badgeBottomY + Math.round(H * 0.015) 
-      : Math.round(H * 0.735);
+      : Math.round(H * 0.745);
 
-    // The horizontal bar bounds (11.8% to 45.6% of screen width)
     const startX = Math.round(W * 0.118);
     const endX = Math.round(W * 0.456);
     const totalBarWidth = endX - startX;
 
-    // Relative vertical offsets for Attack, Defense, HP rows below the card top
     const barOffsets = [
-      Math.round(H * 0.042), // Attack bar center
-      Math.round(H * 0.086), // Defense bar center
-      Math.round(H * 0.128)  // HP bar center
+      Math.round(H * 0.042), // Attack bar
+      Math.round(H * 0.086), // Defense bar
+      Math.round(H * 0.128)  // HP bar
     ];
 
     const ivs = barOffsets.map((offsetY) => {
@@ -367,10 +368,8 @@ export default function App() {
           const [r, g, b] = [pixel[0], pixel[1], pixel[2]];
           const [h, s, l] = rgbToHsl(r, g, b);
 
-          // Orange bar fill
           const isOrange = (h >= 16 && h <= 55 && s >= 30 && l >= 25 && l <= 85);
-          // Maxed coral-pink/red fill (15)
-          const isCoralRed = ((h >= 340 || h <= 15) && s >= 25 && l >= 30 && l <= 82 && r > g + 20);
+          const isCoralRed = ((h >= 335 || h <= 15) && s >= 25 && l >= 30 && l <= 85 && r > g + 20);
 
           if (isCoralRed) {
             isRed = true;
@@ -385,7 +384,6 @@ export default function App() {
         if (isRed) coralRedPixels++;
       }
 
-      // If coral red dominates, snap to 15
       if (coralRedPixels > totalBarWidth * 0.40) {
         return 15;
       }
@@ -433,7 +431,7 @@ export default function App() {
 
     const linesAfterTab = startIdx !== -1 ? rawLines.slice(startIdx + 1) : rawLines;
 
-    // 2. Extract lines strictly BEFORE "NEW ATTACK" or footer metadata
+    // 2. Filter lines strictly BEFORE "NEW ATTACK" or footer metadata
     const moveAreaLines = [];
     for (let line of linesAfterTab) {
       const up = line.toUpperCase();
@@ -444,11 +442,27 @@ export default function App() {
         up.includes('CAUGHT') ||
         up.includes('WALKED')
       ) {
-        break; // Stop immediately at NEW ATTACK so no second attack is falsely inferred
+        break;
       }
-      if (line.length >= 3 && !up.includes('GYM') && !up.includes('RAID')) {
-        moveAreaLines.push(line);
+
+      // Ignore buttons, headings, and weather boost subtext
+      if (
+        line.length < 3 ||
+        up.includes('GYM') ||
+        up.includes('RAID') ||
+        up.includes('TRAINER') ||
+        up.includes('MEGA') ||
+        up.includes('EVOLVE') ||
+        up.includes('POWER UP') ||
+        up.includes('STARDUST') ||
+        up.includes('CANDY') ||
+        up.includes('WEATHER') || // Ignores "WEATHER BONUS" lines
+        up.includes('BONUS')
+      ) {
+        continue;
       }
+
+      moveAreaLines.push(line);
     }
 
     // 3. Match against official moves dictionary
