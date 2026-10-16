@@ -677,7 +677,7 @@ const extractMovesFromCanvas = async (worker, canvas) => {
       await worker.terminate();
 
       setActiveRecord(current);
-      setShowVerifyModal(true);
+      setIsModalOpen(true);
     } catch (error) {
       console.error("Scan processing error:", error);
       alert("Error scanning image: " + (error.message || error));
