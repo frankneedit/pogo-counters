@@ -280,14 +280,14 @@ export default function App() {
     const moveRes = await worker.recognize(moveCanvas);
     const rawLines = moveRes.data.lines.map(l => l.text.trim());
 
-    // 1. Start AFTER the Gyms & Raids header
+    // 1. Start AFTER the Gyms & Raids / Trainer Battles tab header
     let startIdx = rawLines.findIndex(t => {
       const up = t.toUpperCase();
       return up.includes('GYM') || up.includes('RAID') || up.includes('TRAINER');
     });
     const linesAfterTab = startIdx !== -1 ? rawLines.slice(startIdx + 1) : rawLines;
 
-    // 2. STOP immediately once reaching "NEW ATTACK" or trade metadata
+    // 2. STOP before bottom metadata or secondary buttons
     let endIdx = linesAfterTab.findIndex(t => {
       const up = t.toUpperCase();
       return (
@@ -299,7 +299,7 @@ export default function App() {
     });
     const moveAreaLines = endIdx !== -1 ? linesAfterTab.slice(0, endIdx) : linesAfterTab;
 
-    // 3. Clean remaining candidate move names
+    // 3. Keep real move names (check specifically for 'POWER UP' so 'Earth Power' is not dropped)
     const candidateLines = moveAreaLines
       .map(t => t.replace(/\d+/g, '').replace(/[^a-zA-Z\s]/g, '').trim())
       .filter(t => {
@@ -312,7 +312,7 @@ export default function App() {
           !up.includes('BATTLE') &&
           !up.includes('STARDUST') &&
           !up.includes('CANDY') &&
-          !up.includes('POWER') &&
+          !up.includes('POWER UP') && // Fixed: checks "POWER UP", allowing "Earth Power"
           !up.includes('PRIMAL') &&
           !up.includes('REVERSION')
         );
